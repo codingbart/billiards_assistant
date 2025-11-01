@@ -52,10 +52,15 @@ def analyze_image():
         if white_ball is None:
             return jsonify({"error": "Nie udało się znaleźć białej bili (Model YOLO)"}), 500
 
-        # Logika geometrii pozostaje bez zmian
+        # === POPRAWKA ===
+        # Wywołujemy z 4 argumentami
         default_radius = white_ball.get('r', 18) 
         lines, ghost_ball = calculate_shot_lines(white_ball, target_ball, pocket, default_radius)
         
+        print("INFO: Zwracam pełne dane z ghost_ball")
+        
+        # === POPRAWKA ===
+        # Zwracamy wszystko, w tym ghost_ball
         return jsonify({
             "white_ball": white_ball,
             "other_balls": other_balls,

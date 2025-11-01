@@ -43,8 +43,6 @@ class NetworkManager {
     
     // ---------------------------------------------------------------
     // ⚠️ WAŻNE: ZMIEŃ TO IP ⚠️
-    // Wpisz tutaj adres IP swojego komputera w sieci lokalnej
-    // (Na Macu: Ustawienia -> Wi-Fi -> (i) obok nazwy sieci -> Adres IP)
     // ---------------------------------------------------------------
     let serverURLString = "http://192.168.2.111:5001/analyze"
     
@@ -111,7 +109,12 @@ class NetworkManager {
                 
                 guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
                     print("BŁĄD SERWERA: \(response.debugDescription)")
-                    completion(.failure(NSError(domain: "NetworkManager", code: -4, userInfo: [NSLocalizedDescriptionKey: "Błąd serwera (kod inny niż 2xx)"])))
+                    if let data = data, let errorString = String(data: data, encoding: .utf8) {
+                        print("Odpowiedź serwera: \(errorString)")
+                        completion(.failure(NSError(domain: "NetworkManager", code: -4, userInfo: [NSLocalizedDescriptionKey: "Błąd serwera: \(errorString)"])))
+                    } else {
+                        completion(.failure(NSError(domain: "NetworkManager", code: -4, userInfo: [NSLocalizedDescriptionKey: "Błąd serwera (kod inny niż 2xx)"])))
+                    }
                     return
                 }
                 
@@ -129,7 +132,7 @@ class NetworkManager {
                     print("BŁĄD DEKODOWANIA JSON: \(error)")
                     // Spróbuj wydrukować, co serwer faktycznie odesłał
                     if let errorString = String(data: data, encoding: .utf8) {
-                        print("Serwer zwrócił: \(errorString)")
+                        print("Serwer zwrócił (błąd dekodowania): \(errorString)")
                     }
                     completion(.failure(error))
                 }

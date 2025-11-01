@@ -3,8 +3,14 @@ import SwiftUI
 struct CameraView: View {
     // Stany obrazu i selekcji
     @State private var capturedImage: UIImage? = UIImage(named: "test.jpg")
-    @State private var targetBallPosition: CGPoint? // Pozycja kropki na EKRANIE
-    @State private var pocketPosition: CGPoint?   // Pozycja X na EKRANIE
+    
+    // Pozycje na EKRANIE (do rysowania kropek)
+    @State private var targetBallPosition: CGPoint?
+    @State private var pocketPosition: CGPoint?
+    
+    // Przeliczone pozycje na OBRAZIE (do wysłania do serwera)
+    @State private var targetBallPoint: Point?
+    @State private var pocketPoint: Point?
     
     // Stany sieciowe
     @State private var networkManager = NetworkManager()
@@ -12,9 +18,9 @@ struct CameraView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     
-    // --- NOWE STANY DO OBSŁUGI LUPY ---
-    @GestureState private var dragLocation: CGPoint = .zero // Aktualna pozycja palca
-    @State private var isDragging = false // Czy palec jest na ekranie
+    // Stany lupy
+    @GestureState private var dragLocation: CGPoint = .zero
+    @State private var isDragging = false
     
     var body: some View {
         let loupeOffset: CGFloat = -100.0
@@ -38,7 +44,7 @@ struct CameraView: View {
                             .scaledToFit()
                             .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                         
-                        // Rysowanie znaczników (bez zmian)
+                        // Rysowanie znaczników
                         if let targetBallPosition {
                             Circle().fill(Color.red.opacity(0.7)).frame(width: 20, height: 20).position(targetBallPosition)
                         }
@@ -48,59 +54,51 @@ struct CameraView: View {
                                 .frame(width: 30, height: 30).position(pocketPosition)
                         }
                         
-                        // Rysowanie linii (bez zmian)
+                        // Rysowanie linii
                         if let result = analysisResult {
                             drawAnalysisLines(result: result, scale: scale, offset: offset)
                         }
                         
-                        // --- NOWA LUPA (POWIĘKSZENIE) ---
+                        // Lupa
                         if isDragging {
                             MagnifyingLoupeView(
                                 image: image,
-                                touchPoint: dragLocation, // Aktualna pozycja palca
-                                imageFrame: imageFrame    // Ramka obrazka
+                                touchPoint: dragLocation,
+                                imageFrame: imageFrame
                             )
-                            // Przesuń lupę 100 punktów NAD palec
                             .position(x: dragLocation.x, y: dragLocation.y + loupeOffset)
                         }
                         
                     }
                 } // Koniec ZStack obrazka
-                // --- ZMIANA GESTU ---
-                // Usuwamy .onTapGesture i dodajemy .gesture(DragGesture...)
                 .gesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .local)
                         .updating($dragLocation) { value, state, _ in
-                            state = value.location // Aktualizuje pozycję przeciągania
+                            state = value.location
                         }
                         .onChanged { _ in
                             if !self.isDragging {
-                                // To jest początek dotyku
                                 self.isDragging = true
-                                self.analysisResult = nil // Wyczyść stare linie
+                                self.analysisResult = nil
                                 self.errorMessage = nil
                             }
                         }
                         .onEnded { value in
-                            self.isDragging = false // Ukryj lupę
+                            self.isDragging = false
                             
-                            // --- POPRAWIONA LOGIKA ZAPISU ---
-                            
-                            // 1. Oblicz pozycję KRZYŻYKA lupy (pozycja palca + przesunięcie)
                             let loupeCrosshairLocation = CGPoint(x: value.location.x, y: value.location.y + loupeOffset)
                             
-                            // 2. "Przyklej" pozycję KRZYŻYKA do krawędzi obrazka
                             let clampedX = min(max(loupeCrosshairLocation.x, imageFrame.minX), imageFrame.maxX)
                             let clampedY = min(max(loupeCrosshairLocation.y, imageFrame.minY), imageFrame.maxY)
                             let clampedLocation = CGPoint(x: clampedX, y: clampedY)
                             
-                            // 3. Zapisz tę "przyklejoną" pozycję krzyżyka (a nie palca!)
+                            // Przekazujemy rozmiar geometrii do funkcji handleSelection
                             handleSelection(at: clampedLocation, in: geometry.size)
                         }
                 )
             } // Koniec GeometryReader
             
-            // Dolny przycisk (bez zmian)
+            // Dolny przycisk
             VStack {
                 if let errorMessage {
                     Text(errorMessage).padding().background(Color.red).foregroundColor(.white).cornerRadius(10)
@@ -123,37 +121,34 @@ struct CameraView: View {
     
     // MARK: - Funkcje Logiki
     
-    // Zmieniamy handleTap na handleSelection
     func handleSelection(at location: CGPoint, in viewSize: CGSize) {
         guard let image = capturedImage else { return }
         
-        // Sprawdź, czy kliknięcie było na obrazku
-        guard let _ = convertFromViewToImage(point: location, imageSize: image.size, viewSize: viewSize) else {
+        guard let imagePoint = convertFromViewToImage(point: location, imageSize: image.size, viewSize: viewSize) else {
             print("Puszczono palec poza obrazkiem")
             return
         }
         
         if targetBallPosition == nil {
-            targetBallPosition = location // Zapisz pozycję EKRANOWĄ
+            targetBallPosition = location
+            targetBallPoint = imagePoint
         } else if pocketPosition == nil {
             pocketPosition = location
+            pocketPoint = imagePoint
         } else {
             // Resetuj
             targetBallPosition = location
+            targetBallPoint = imagePoint
             pocketPosition = nil
+            pocketPoint = nil
         }
     }
     
     func sendAnalysisRequest() {
-        let viewSize = UIScreen.main.bounds.size
         guard let image = capturedImage else { self.errorMessage = "Brak obrazu"; return }
-        guard let targetBallTap = targetBallPosition else { self.errorMessage = "Wybierz bilę"; return }
-        guard let pocketTap = pocketPosition else { self.errorMessage = "Wybierz łuzę"; return }
         
-        guard let targetPoint = convertFromViewToImage(point: targetBallTap, imageSize: image.size, viewSize: viewSize),
-              let pocketPoint = convertFromViewToImage(point: pocketTap, imageSize: image.size, viewSize: viewSize) else {
-            self.errorMessage = "Błąd konwersji współrzędnych"; return
-        }
+        guard let targetPoint = targetBallPoint else { self.errorMessage = "Wybierz bilę"; return }
+        guard let pocketPoint = pocketPoint else { self.errorMessage = "Wybierz łuzę"; return }
         
         isLoading = true
         errorMessage = nil
@@ -170,18 +165,12 @@ struct CameraView: View {
         }
     }
     
-    // --- FUNKCJE POMOCNICZE (bez zmian) ---
-    
-    // Funkcja do rysowania linii (wydzielona dla czystości)
-    // MARK: - Funkcje Pomocnicze (POPRAWIONE RYSOWANIE)
+    // MARK: - Funkcje Pomocnicze (Z RYSOWANIEM GHOST BALL)
     
     @ViewBuilder
     func drawAnalysisLines(result: AnalysisResult, scale: CGFloat, offset: CGPoint) -> some View {
         
-        // --- POPRAWIONA LOGIKA RYSOWANIA ---
-        
         // 1. Narysuj linię BILA -> ŁUZA (linia[0], zielona, ciągła)
-        // Zakładamy, że pierwsza linia w tablicy to linia strzału bili
         if let line = result.shot_lines.first {
             let startPoint = convertFromImageToView(point: line.start, scale: scale, offset: offset)
             let endPoint = convertFromImageToView(point: line.end, scale: scale, offset: offset)
@@ -193,7 +182,6 @@ struct CameraView: View {
         }
         
         // 2. Narysuj linię BIAŁA -> BILA DUCH (linia[1], czerwona, przerywana)
-        // Zakładamy, że druga linia to linia celowania
         if result.shot_lines.count > 1 {
             let line = result.shot_lines[1]
             let startPoint = convertFromImageToView(point: line.start, scale: scale, offset: offset)
@@ -203,12 +191,11 @@ struct CameraView: View {
                 path.move(to: startPoint)
                 path.addLine(to: endPoint)
             }
-            // To jest linia CELOWANIA, więc jest czerwona i przerywana
             .stroke(Color.red.opacity(0.8), style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [10, 5]))
         }
-        // ------------------------------------
         
-        // Rysuj bilę ducha (bez zmian)
+        // === POPRAWKA ===
+        // 3. Rysuj bilę ducha (przywrócone)
         let ghostBall = result.ghost_ball
         let centerPoint = convertFromImageToView(point: ghostBall.center, scale: scale, offset: offset)
         let radius = CGFloat(ghostBall.radius) * scale
@@ -222,7 +209,6 @@ struct CameraView: View {
     // --- Reszta funkcji pomocniczych (bez zmian) ---
     
     func calculateScaleAndOffset(imageSize: CGSize, viewSize: CGSize) -> (scale: CGFloat, offset: CGPoint) {
-        // ... (bez zmian) ...
         guard imageSize.width > 0, imageSize.height > 0 else { return (0, .zero) }
         let widthScale = viewSize.width / imageSize.width
         let heightScale = viewSize.height / imageSize.height
@@ -234,7 +220,6 @@ struct CameraView: View {
     }
     
     func convertFromViewToImage(point: CGPoint, imageSize: CGSize, viewSize: CGSize) -> Point? {
-        // ... (bez zmian) ...
         guard imageSize.width > 0, imageSize.height > 0 else { return nil }
         let (scale, offset) = calculateScaleAndOffset(imageSize: imageSize, viewSize: viewSize)
         let imageX = (point.x - offset.x) / scale
@@ -246,7 +231,6 @@ struct CameraView: View {
     }
     
     func convertFromImageToView(point: Point, scale: CGFloat, offset: CGPoint) -> CGPoint {
-        // ... (bez zmian) ...
         let viewX = (CGFloat(point.x) * scale) + offset.x
         let viewY = (CGFloat(point.y) * scale) + offset.y
         return CGPoint(x: viewX, y: viewY)
