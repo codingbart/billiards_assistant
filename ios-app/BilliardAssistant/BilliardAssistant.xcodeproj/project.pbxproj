@@ -10,8 +10,8 @@
 		1A06AAF52EB6969E00D6787C /* NetworkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A06AAF42EB6968500D6787C /* NetworkManager.swift */; };
 		1A06AB052EB697BD00D6787C /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A06AB042EB697BD00D6787C /* CameraView.swift */; };
 		1A06AB072EB699A600D6787C /* CameraViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A06AB062EB699A500D6787C /* CameraViewController.swift */; };
-		1A06AB152EB69E3100D6787C /* test.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 1A06AB142EB69E3100D6787C /* test.jpg */; };
 		1A06AB172EB6A91000D6787C /* MagnifyingLoupeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A06AB162EB6A91000D6787C /* MagnifyingLoupeView.swift */; };
+		1A80F55A2EC14E46008D670F /* SplashScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A80F5592EC14E46008D670F /* SplashScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -35,8 +35,8 @@
 		1A06AAF42EB6968500D6787C /* NetworkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkManager.swift; sourceTree = "<group>"; };
 		1A06AB042EB697BD00D6787C /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		1A06AB062EB699A500D6787C /* CameraViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraViewController.swift; sourceTree = "<group>"; };
-		1A06AB142EB69E3100D6787C /* test.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = test.jpg; sourceTree = "<group>"; };
 		1A06AB162EB6A91000D6787C /* MagnifyingLoupeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagnifyingLoupeView.swift; sourceTree = "<group>"; };
+		1A80F5592EC14E46008D670F /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
 		1ABF1B712EB17ADA009C717D /* BilliardAssistant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BilliardAssistant.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1ABF1B7E2EB17ADD009C717D /* BilliardAssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BilliardAssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1ABF1B882EB17ADD009C717D /* BilliardAssistantUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BilliardAssistantUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -88,6 +88,7 @@
 		1ABF1B682EB17ADA009C717D = {
 			isa = PBXGroup;
 			children = (
+				1A80F5592EC14E46008D670F /* SplashScreen.swift */,
 				1A06AB062EB699A500D6787C /* CameraViewController.swift */,
 				1A06AB042EB697BD00D6787C /* CameraView.swift */,
 				1A06AB162EB6A91000D6787C /* MagnifyingLoupeView.swift */,
@@ -96,7 +97,6 @@
 				1ABF1B812EB17ADD009C717D /* BilliardAssistantTests */,
 				1ABF1B8B2EB17ADD009C717D /* BilliardAssistantUITests */,
 				1ABF1B722EB17ADA009C717D /* Products */,
-				1A06AB142EB69E3100D6787C /* test.jpg */,
 			);
 			sourceTree = "<group>";
 		};
@@ -230,7 +230,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1A06AB152EB69E3100D6787C /* test.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -257,6 +256,7 @@
 			files = (
 				1A06AAF52EB6969E00D6787C /* NetworkManager.swift in Sources */,
 				1A06AB172EB6A91000D6787C /* MagnifyingLoupeView.swift in Sources */,
+				1A80F55A2EC14E46008D670F /* SplashScreen.swift in Sources */,
 				1A06AB072EB699A600D6787C /* CameraViewController.swift in Sources */,
 				1A06AB052EB697BD00D6787C /* CameraView.swift in Sources */,
 			);

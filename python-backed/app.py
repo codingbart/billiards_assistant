@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import json
-from processing import detect_all_balls, calculate_shot_lines
+from processing import detect_all_balls, calculate_shot_lines, calculate_manual_shot_lines
 
 # Wczytaj klucz API ze zmiennej środowiskowej
 # Ustawimy ją w terminalu przed uruchomieniem
@@ -73,7 +73,41 @@ def analyze_image():
     finally:
         if os.path.exists(filepath):
             os.remove(filepath)
+            
+@app.route('/calculate_manual', methods=['POST'])
+def calculate_manual():
+    print("INFO: Otrzymano żądanie obliczeń ręcznych...")
 
+    try:
+        data = request.json
+
+        # Sprawdzamy, czy mamy wszystkie 3 punkty
+        if 'white_ball' not in data or 'target_ball' not in data or 'pocket' not in data:
+            return jsonify({"error": "Brak wymaganych punktów (white_ball, target_ball, pocket)"}), 400
+
+        white_ball_point = data['white_ball']
+        target_ball_point = data['target_ball']
+        pocket_point = data['pocket']
+
+    except Exception as e:
+        return jsonify({"error": f"Nieprawidłowy format danych JSON: {str(e)}"}), 400
+
+    try:
+        # Używamy nowej funkcji, która nie wymaga AI
+        lines, ghost_ball = calculate_manual_shot_lines(white_ball_point, target_ball_point, pocket_point)
+
+        print("INFO: Zwracam pełne dane z ghost_ball (kalkulacja ręczna)")
+
+        # Zwracamy odpowiedź zgodną ze strukturą AnalysisResult
+        return jsonify({
+            "shot_lines": lines,
+            "ghost_ball": ghost_ball,
+            "white_ball": {"x": white_ball_point['x'], "y": white_ball_point['y'], "r": 18}, # Zwracamy fikcyjną bilę
+            "other_balls": [] # Pusta tablica
+        })
+
+    except Exception as e:
+        return jsonify({"error": f"Wystąpił błąd podczas obliczeń: {str(e)}"}), 500
 @app.route('/')
 def hello():
     return jsonify({"message": "Serwer Asystenta Bilardowego działa! (Tryb detekcji YOLO)"})

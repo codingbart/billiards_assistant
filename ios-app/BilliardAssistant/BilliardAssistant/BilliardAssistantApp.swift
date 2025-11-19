@@ -11,7 +11,7 @@ import SwiftUI
 struct BilliardAssistantApp: App {
     var body: some Scene {
         WindowGroup {
-            CameraView()
+            ContentView()
         }
     }
 }

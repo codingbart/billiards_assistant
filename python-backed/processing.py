@@ -1,6 +1,8 @@
 import numpy as np
-from roboflow import Roboflow  # Importujemy nową bibliotekę
+from roboflow import Roboflow
+import json
 
+# Ta funkcja jest poprawna, zostawiamy bez zmian
 def calculate_shot_lines(white_ball, target_ball, pocket, ball_radius):
     """
     Oblicza linie strzału na podstawie pozycji bil i łuzy.
@@ -24,9 +26,6 @@ def calculate_shot_lines(white_ball, target_ball, pocket, ball_radius):
     V_unit_direction = V_from_pocket_to_target / distance_to_pocket
 
     # 4. Oblicz pozycję "Bili Ducha"
-    #    Zacznij od bili docelowej (P_target)
-    #    i przesuń ją WZDŁUŻ wektora kierunkowego (V_unit_direction)
-    #    o dystans równy średnicy bili (2 * radius)
     radius = float(target_ball.get('r', ball_radius))
     P_ghost_ball = P_target + V_unit_direction * (2 * radius)
 
@@ -50,26 +49,25 @@ def calculate_shot_lines(white_ball, target_ball, pocket, ball_radius):
     return lines, ghost_ball_position
 
 # ---
-# --- NOWA, PRAWDZIWA FUNKCJA DETEKCJI (YOLO) ---
+# --- POPRAWIONA FUNKCJA DETEKCJI (YOLO) ---
 # ---
 def detect_all_balls(image_path, api_key):
     """
     Używa modelu YOLO z Roboflow do wykrywania bil na obrazie.
     """
-    
-    print("INFO: Używam modelu detekcji YOLO z Roboflow...")
-    
+
+    print("INFO: Używam modelu detekcji YOLO v2 z Roboflow...")
+
     try:
         rf = Roboflow(api_key=api_key)
-        # ID modelu i wersja są z Twojego panelu Roboflow
-        # Model URL: billiarddet-kyjmh
-        # Wersja: v2
         project = rf.workspace().project("billiarddet-kyjmh")
-        model = project.version(1).model # Używamy wersji 2, którą właśnie wytrenowałeś
         
-        # Wyślij obraz do Roboflow i pobierz predykcje
+        # === POPRAWKA 1: Używamy nowej, wytrenowanej wersji 2 ===
+        model = project.version(3).model 
+
+        # Używamy wyższego confidence, ponieważ nowy model jest lepiej wytrenowany
         prediction = model.predict(image_path, confidence=20, overlap=30).json()
-        
+
     except Exception as e:
         print(f"BŁĄD Roboflow: {e}")
         raise ValueError(f"Nie udało się połączyć z Roboflow lub przetworzyć obrazu: {e}")
@@ -79,18 +77,68 @@ def detect_all_balls(image_path, api_key):
 
     # Przetwórz wyniki z modelu
     for box in prediction['predictions']:
-        # Konwertuj bounding box [x_center, y_center, width, height] na nasz format
         ball_data = {
             "x": int(box['x']),
             "y": int(box['y']),
-            "r": int((box['width'] + box['height']) / 4) # Przybliżony promień
+            "r": int((box['width'] + box['height']) / 4) 
         }
-        
-        # TUTAJ ŁĄCZYMY KLASY (tak jak planowaliśmy)
-        if box['class'] == 'White': # Zgodnie z oryginalnym datasetem
+
+        # === POPRAWKA 2: Usunęliśmy "hacka" na 'N1' ===
+        # Nowy model (v2) jest wytrenowany, aby poprawnie 
+        # rozpoznawać bilę białą jako 'White'.
+        if box['class'] == 'White':
             white_ball = ball_data
         else:
-            # Wszystkie inne (N1, N2 itd.) traktujemy jako 'other_ball'
             other_balls.append(ball_data)
-            
+
     return white_ball, other_balls
+
+# === NOWA FUNKCJA DLA TRYBU RĘCZNEGO ===
+def calculate_manual_shot_lines(white_ball_point, target_ball_point, pocket_point):
+    """
+    Oblicza linie strzału WYŁĄCZNIE na podstawie 3 ręcznie wybranych punktów.
+    Używa stałego promienia bili.
+    """
+    
+    # Używamy stałego, domyślnego promienia.
+    # Wartość 18 pochodzi z oryginalnego kodu Roboflow (średnia)
+    BALL_RADIUS = 18 
+
+    # Współrzędne jako wektory numpy
+    P_pocket = np.array([pocket_point['x'], pocket_point['y']])
+    P_target = np.array([target_ball_point['x'], target_ball_point['y']])
+    P_white = np.array([white_ball_point['x'], white_ball_point['y']])
+
+    epsilon = 1e-6
+
+    # 1. Stwórz wektor OD ŁUZY DO BILI DOCELOWEJ
+    V_from_pocket_to_target = P_target - P_pocket
+
+    # 2. Oblicz jego długość
+    distance_to_pocket = np.linalg.norm(V_from_pocket_to_target) + epsilon
+
+    # 3. Stwórz wektor jednostkowy (kierunek)
+    V_unit_direction = V_from_pocket_to_target / distance_to_pocket
+
+    # 4. Oblicz pozycję "Bili Ducha"
+    radius = float(BALL_RADIUS) # Używamy naszej stałej
+    P_ghost_ball = P_target + V_unit_direction * (2 * radius)
+
+    # 5. Przygotuj linie do zwrotu
+    lines = [
+        { 
+            "start": {"x": int(P_target[0]), "y": int(P_target[1])},
+            "end": {"x": int(P_pocket[0]), "y": int(P_pocket[1])}
+        },
+        { 
+            "start": {"x": int(P_white[0]), "y": int(P_white[1])},
+            "end": {"x": int(P_ghost_ball[0]), "y": int(P_ghost_ball[1])}
+        }
+    ]
+
+    ghost_ball_position = {
+        "center": {"x": int(P_ghost_ball[0]), "y": int(P_ghost_ball[1])},
+        "radius": int(radius)
+    }
+
+    return lines, ghost_ball_position
