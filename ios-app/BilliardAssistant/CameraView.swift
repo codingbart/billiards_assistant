@@ -1,12 +1,9 @@
 import SwiftUI
 
 struct CameraView: View {
-    // Stany obrazu i selekcji
-    // Ta zmienna będzie teraz wypełniana przez CameraViewController
+    
     @State private var capturedImage: UIImage?
     
-    // Zmienna do komunikacji z Koordynatorem kamery
-    // Musimy ją przechowywać w stanie, aby jej nie utracić
     @StateObject private var cameraCoordinator = CameraViewController.Coordinator()
     @State private var isAutoMode = true
     @State private var whiteBallPosition: CGPoint?
@@ -17,13 +14,11 @@ struct CameraView: View {
     @State private var targetBallPoint: Point?
     @State private var pocketPoint: Point?
     
-    // Stany sieciowe
     @State private var networkManager = NetworkManager()
     @State private var analysisResult: AnalysisResult?
     @State private var isLoading = false
     @State private var errorMessage: String?
     
-    // Stany lupy
     @GestureState private var dragLocation: CGPoint = .zero
     @State private var isDragging = false
     
@@ -32,13 +27,10 @@ struct CameraView: View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
-            // --- GŁÓWNA LOGIKA WIDOKU ---
             if capturedImage == nil {
-                // EKRAN 1: PODGLĄD KAMERY NA ŻYWO
                 CameraViewController(capturedImage: $capturedImage, coordinator: cameraCoordinator)
                     .edgesIgnoringSafeArea(.all)
             } else {
-                // EKRAN 2: ANALIZA (to co mieliśmy wcześniej)
                 GeometryReader { geometry in
                     let (scale, offset) = calculateScaleAndOffset(imageSize: capturedImage?.size ?? .zero, viewSize: geometry.size)
                     let imageFrame = CGRect(
@@ -55,7 +47,6 @@ struct CameraView: View {
                                 .scaledToFit()
                                 .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                             
-                            // Rysowanie znaczników
                             if let whiteBallPosition {
                                 Circle().fill(Color.blue.opacity(0.7)).frame(width: 20, height: 20).position(whiteBallPosition)
                             }
@@ -68,12 +59,10 @@ struct CameraView: View {
                                     .frame(width: 30, height: 30).position(pocketPosition)
                             }
                             
-                            // Rysowanie linii
                             if let result = analysisResult {
                                 drawAnalysisLines(result: result, scale: scale, offset: offset)
                             }
                             
-                            // Lupa
                             if isDragging {
                                 MagnifyingLoupeView(
                                     image: image,
@@ -83,7 +72,7 @@ struct CameraView: View {
                                 .position(x: dragLocation.x, y: dragLocation.y + loupeOffset)
                             }
                         }
-                    } // Koniec ZStack obrazka
+                    } 
                     .gesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .local)
                             .updating($dragLocation) { value, state, _ in
@@ -92,7 +81,7 @@ struct CameraView: View {
                             .onChanged { _ in
                                 if !self.isDragging {
                                     self.isDragging = true
-                                    self.analysisResult = nil // Czyścimy linie podczas przeciągania
+                                    self.analysisResult = nil 
                                     self.errorMessage = nil
                                 }
                             }
@@ -108,15 +97,12 @@ struct CameraView: View {
                                 handleSelection(at: clampedLocation, in: geometry.size)
                             }
                     )
-                } // Koniec GeometryReader
+                } 
             }
             
-            // --- DOLNY PRZYCISK I GÓRNY PASEK ---
             VStack {
-                // Górny pasek (widoczny tylko na ekranie analizy)
                 if capturedImage != nil {
                     HStack {
-                        // Przycisk "Wstecz" do ponownego zrobienia zdjęcia
                         Button(action: {
                             resetAll()
                         }) {
@@ -134,7 +120,6 @@ struct CameraView: View {
                     .padding(.top, 50)
                 }
                 
-                // Wyświetlacz błędów i przełącznik trybu
                 if capturedImage != nil {
                     if let errorMessage {
                         Text(errorMessage).padding().background(Color.red).foregroundColor(.white).cornerRadius(10)
@@ -160,13 +145,10 @@ struct CameraView: View {
                 
                 Spacer()
                 
-                // Główny przycisk (Migawka / Analiza)
                 Button(action: {
                     if capturedImage == nil {
-                        // Jesteśmy w trybie kamery, zrób zdjęcie
                         cameraCoordinator.capturePhoto()
                     } else {
-                        // Jesteśmy w trybie analizy, wyślij żądanie
                         sendAnalysisRequest()
                     }
                 }) {
@@ -184,7 +166,6 @@ struct CameraView: View {
         }
     }
     
-    // MARK: - Funkcje Logiki
     
     func resetAll() {
         capturedImage = nil
@@ -202,7 +183,6 @@ struct CameraView: View {
     }
 
     func handleSelection(at location: CGPoint, in viewSize: CGSize) {
-        // (Ta funkcja jest taka sama jak wcześniej, bez zmian)
         guard let image = capturedImage else { return }
         
         guard let imagePoint = convertFromViewToImage(point: location, imageSize: image.size, viewSize: viewSize) else {
@@ -260,10 +240,8 @@ struct CameraView: View {
     }
     
     func sendAnalysisRequest() {
-        // (Ta funkcja jest taka sama jak wcześniej, bez zmian)
         isLoading = true
         errorMessage = nil
-        // UWAGA: Nie czyścimy tu analysisResult, aby linie nie znikały
         
         if isAutoMode {
             guard let image = capturedImage else { self.errorMessage = "Brak obrazu"; isLoading = false; return }
@@ -311,10 +289,8 @@ struct CameraView: View {
         }
     }
     
-    // MARK: - Funkcje Pomocnicze (bez zmian)
     
     func getInstructionText() -> String {
-        // (Ta funkcja jest taka sama jak wcześniej, bez zmian)
         if isAutoMode {
             if targetBallPoint == nil {
                 return "Tryb AI: Wybierz BILĘ DOCELOWĄ"
@@ -338,7 +314,6 @@ struct CameraView: View {
     
     @ViewBuilder
     func drawAnalysisLines(result: AnalysisResult, scale: CGFloat, offset: CGPoint) -> some View {
-        // (Ta funkcja jest taka sama jak wcześniej, bez zmian)
         if let line = result.shot_lines.first {
             let startPoint = convertFromImageToView(point: line.start, scale: scale, offset: offset)
             let endPoint = convertFromImageToView(point: line.end, scale: scale, offset: offset)
@@ -372,7 +347,6 @@ struct CameraView: View {
     }
     
     func calculateScaleAndOffset(imageSize: CGSize, viewSize: CGSize) -> (scale: CGFloat, offset: CGPoint) {
-        // (Ta funkcja jest taka sama jak wcześniej, bez zmian)
         guard imageSize.width > 0, imageSize.height > 0 else { return (0, .zero) }
         let widthScale = viewSize.width / imageSize.width
         let heightScale = viewSize.height / imageSize.height
@@ -384,7 +358,6 @@ struct CameraView: View {
     }
     
     func convertFromViewToImage(point: CGPoint, imageSize: CGSize, viewSize: CGSize) -> Point? {
-        // (Ta funkcja jest taka sama jak wcześniej, bez zmian)
         guard imageSize.width > 0, imageSize.height > 0 else { return nil }
         let (scale, offset) = calculateScaleAndOffset(imageSize: imageSize, viewSize: viewSize)
         let imageX = (point.x - offset.x) / scale
@@ -396,7 +369,6 @@ struct CameraView: View {
     }
     
     func convertFromImageToView(point: Point, scale: CGFloat, offset: CGPoint) -> CGPoint {
-        // (Ta funkcja jest taka sama jak wcześniej, bez zmian)
         let viewX = (CGFloat(point.x) * scale) + offset.x
         let viewY = (CGFloat(point.y) * scale) + offset.y
         return CGPoint(x: viewX, y: viewY)

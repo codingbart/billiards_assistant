@@ -6,14 +6,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Stałe konfiguracyjne
 DEFAULT_BALL_RADIUS = 18
 ROBOFLOW_CONFIDENCE = int(os.getenv('ROBOFLOW_CONFIDENCE', '20'))
 ROBOFLOW_OVERLAP = int(os.getenv('ROBOFLOW_OVERLAP', '30'))
 ROBOFLOW_PROJECT = os.getenv('ROBOFLOW_PROJECT', 'billiarddet-kyjmh')
 ROBOFLOW_VERSION = int(os.getenv('ROBOFLOW_VERSION', '3'))
 
-# Cache dla modelu Roboflow
 _roboflow_model_cache = None
 
 def _get_roboflow_model(api_key):
@@ -46,23 +44,18 @@ def calculate_shot_lines(white_ball, target_ball, pocket, ball_radius=None):
     if ball_radius is None:
         ball_radius = DEFAULT_BALL_RADIUS
 
-    # Współrzędne jako wektory numpy
     P_pocket = np.array([pocket['x'], pocket['y']])
     P_target = np.array([target_ball['x'], target_ball['y']])
     P_white = np.array([white_ball['x'], white_ball['y']])
 
     epsilon = 1e-6
 
-    # 1. Stwórz wektor OD ŁUZY DO BILI DOCELOWEJ
     V_from_pocket_to_target = P_target - P_pocket
 
-    # 2. Oblicz jego długość (dystans od bili do łuzy)
     distance_to_pocket = np.linalg.norm(V_from_pocket_to_target) + epsilon
 
-    # 3. Stwórz wektor jednostkowy (kierunek) OD ŁUZY DO BILI
     V_unit_direction = V_from_pocket_to_target / distance_to_pocket
 
-    # 4. Oblicz pozycję "Bili Ducha"
     radius = float(target_ball.get('r', ball_radius))
     P_ghost_ball = P_target + V_unit_direction * (2 * radius)
 
@@ -109,7 +102,6 @@ def detect_all_balls(image_path, api_key):
     white_ball = None
     other_balls = []
 
-    # Przetwórz wyniki z modelu
     for box in prediction.get('predictions', []):
         ball_data = {
             "x": int(box['x']),
@@ -139,8 +131,6 @@ def calculate_manual_shot_lines(white_ball_point, target_ball_point, pocket_poin
     Returns:
         Tuple (lines, ghost_ball_position)
     """
-    # Używamy funkcji calculate_shot_lines z domyślnym promieniem
-    # Tworzymy obiekty bil z domyślnym promieniem
     white_ball = {"x": white_ball_point['x'], "y": white_ball_point['y'], "r": DEFAULT_BALL_RADIUS}
     target_ball = {"x": target_ball_point['x'], "y": target_ball_point['y'], "r": DEFAULT_BALL_RADIUS}
     
