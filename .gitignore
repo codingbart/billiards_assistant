@@ -13,4 +13,5 @@ static/uploads/*
 # OS
 .DS_Store
 
+.env.example
 .env
