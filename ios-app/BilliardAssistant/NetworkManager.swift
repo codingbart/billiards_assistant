@@ -1,6 +1,64 @@
 import Foundation
 import UIKit
 
+// MARK: - Konfiguracja
+struct NetworkConfig {
+    // Adres serwera - można zmienić w Info.plist lub przez zmienną środowiskową
+    static var serverBaseURL: String {
+        if let url = Bundle.main.object(forInfoDictionaryKey: "ServerBaseURL") as? String, !url.isEmpty {
+            return url
+        }
+        // Domyślny adres (można zmienić w Info.plist)
+        return "http://192.168.30.103:5001"
+    }
+    
+    // Timeouty
+    static let aiRequestTimeout: TimeInterval = 60.0  // 60s dla żądań AI
+    static let manualRequestTimeout: TimeInterval = 10.0  // 10s dla żądań ręcznych
+    
+    // Parametry obrazu
+    static let targetImageWidth: CGFloat = 416.0
+    static let imageCompressionQuality: CGFloat = 0.7
+    static let maxImageSize: Int = 10 * 1024 * 1024  // 10MB
+    
+    // Retry
+    static let maxRetryAttempts = 2
+    static let retryDelay: TimeInterval = 1.0
+}
+
+// MARK: - Typy błędów
+enum NetworkError: LocalizedError {
+    case invalidURL
+    case encodingError
+    case imageConversionError
+    case imageTooLarge
+    case serverError(String)
+    case networkError(Error)
+    case decodingError(Error)
+    case noData
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Nieprawidłowy adres URL serwera"
+        case .encodingError:
+            return "Nie udało się zakodować danych do JSON"
+        case .imageConversionError:
+            return "Nie udało się przekonwertować obrazu na JPEG"
+        case .imageTooLarge:
+            return "Obraz jest za duży (maksimum 10MB)"
+        case .serverError(let message):
+            return "Błąd serwera: \(message)"
+        case .networkError(let error):
+            return "Błąd sieci: \(error.localizedDescription)"
+        case .decodingError(let error):
+            return "Błąd dekodowania odpowiedzi: \(error.localizedDescription)"
+        case .noData:
+            return "Brak danych w odpowiedzi"
+        }
+    }
+}
+
 // --- Te struktury muszą DOKŁADNIE pasować do JSONa z Twojego backendu ---
 struct AnalysisResult: Codable {
     let ghost_ball: GhostBall
@@ -47,54 +105,147 @@ struct RequestDataManual: Codable {
 
 class NetworkManager {
     
-    // ---------------------------------------------------------------
-    // ⚠️ WAŻNE: ZMIEŃ TO IP ⚠️
-    // ---------------------------------------------------------------
-    let serverURLString = "http://192.168.2.111:5001/analyze"
+    private let aiURLSession: URLSession
+    private let manualURLSession: URLSession
     
-    private let urlSession: URLSession
-        
     init() {
-        let configuration = URLSessionConfiguration.default
-        // Ustaw limit czasu na 90 sekund (zamiast domyślnych 30-60)
-        configuration.timeoutIntervalForRequest = 360.0
-        configuration.timeoutIntervalForResource = 360.0
-            
-        self.urlSession = URLSession(configuration: configuration)
+        // Konfiguracja dla żądań AI (dłuższy timeout)
+        let aiConfiguration = URLSessionConfiguration.default
+        aiConfiguration.timeoutIntervalForRequest = NetworkConfig.aiRequestTimeout
+        aiConfiguration.timeoutIntervalForResource = NetworkConfig.aiRequestTimeout
+        self.aiURLSession = URLSession(configuration: aiConfiguration)
+        
+        // Konfiguracja dla żądań ręcznych (krótszy timeout)
+        let manualConfiguration = URLSessionConfiguration.default
+        manualConfiguration.timeoutIntervalForRequest = NetworkConfig.manualRequestTimeout
+        manualConfiguration.timeoutIntervalForResource = NetworkConfig.manualRequestTimeout
+        self.manualURLSession = URLSession(configuration: manualConfiguration)
     }
-    // Ta funkcja jest teraz w pełni zaimplementowana!
-    func analyzeImage(image: UIImage, targetBall: Point, pocket: Point, completion: @escaping (Result<AnalysisResult, Error>) -> Void) {
-        
-        print("Rozpoczynam analizę... cel: \(targetBall), łuza: \(pocket)")
-        
-        guard let serverURL = URL(string: serverURLString) else {
-            completion(.failure(NSError(domain: "NetworkManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nieprawidłowy adres URL serwera"])))
-            return
+    
+    // MARK: - Helper Methods
+    
+    private func validateImageSize(_ image: UIImage) -> Bool {
+        guard let imageData = image.jpegData(compressionQuality: NetworkConfig.imageCompressionQuality) else {
+            return false
         }
-        
-        // 1. Przygotuj dane JSON do wysłania
-        let requestData = RequestData(target_ball: targetBall, pocket: pocket)
-        guard let jsonData = try? JSONEncoder().encode(requestData) else {
-            completion(.failure(NSError(domain: "NetworkManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "Nie udało się zakodować danych do JSON"])))
-            return
-        }
-        
-        // 2. Przygotuj obraz
-        let targetWidth: CGFloat = 416.0
+        return imageData.count <= NetworkConfig.maxImageSize
+    }
+    
+    private func prepareImageForUpload(_ image: UIImage) -> (UIImage, Data)? {
         var imageToProcess = image
-                
-        if image.size.width > targetWidth {
-            print("Obraz jest za duży (\(image.size.width)px). Zmniejszam do \(targetWidth)px szerokości.")
-            if let resizedImage = image.resized(toWidth: targetWidth) {
+        
+        // Sprawdź rozmiar przed kompresją
+        if !validateImageSize(imageToProcess) {
+            print("Obraz jest za duży, zmniejszam...")
+        }
+        
+        // Zmniejsz jeśli za duży
+        if image.size.width > NetworkConfig.targetImageWidth {
+            print("Obraz jest za duży (\(image.size.width)px). Zmniejszam do \(NetworkConfig.targetImageWidth)px szerokości.")
+            if let resizedImage = image.resized(toWidth: NetworkConfig.targetImageWidth) {
                 imageToProcess = resizedImage
                 print("Pomyślnie zmniejszono obraz do: \(imageToProcess.size)")
             } else {
                 print("Nie udało się zmniejszyć obrazu, wysyłam oryginał.")
             }
         }
-
-        guard let jpegData = imageToProcess.jpegData(compressionQuality: 0.7) else {
-            completion(.failure(NSError(domain: "NetworkManager", code: -3, userInfo: [NSLocalizedDescriptionKey: "Nie udało się przekonwertować obrazu na JPEG"])))
+        
+        guard let jpegData = imageToProcess.jpegData(compressionQuality: NetworkConfig.imageCompressionQuality) else {
+            return nil
+        }
+        
+        // Sprawdź rozmiar po kompresji
+        if jpegData.count > NetworkConfig.maxImageSize {
+            print("Ostrzeżenie: Obraz po kompresji nadal jest duży (\(jpegData.count) bajtów)")
+        }
+        
+        return (imageToProcess, jpegData)
+    }
+    
+    private func performRequest<T: Decodable>(
+        with request: URLRequest,
+        session: URLSession,
+        responseType: T.Type,
+        retryCount: Int = 0,
+        completion: @escaping (Result<T, Error>) -> Void
+    ) {
+        session.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                // Obsługa błędów sieciowych z retry
+                if let error = error {
+                    let nsError = error as NSError
+                    let isRetryable = nsError.code == NSURLErrorTimedOut ||
+                                     nsError.code == NSURLErrorNetworkConnectionLost ||
+                                     nsError.code == NSURLErrorNotConnectedToInternet
+                    
+                    if isRetryable && retryCount < NetworkConfig.maxRetryAttempts {
+                        print("Błąd sieciowy, ponawiam próbę (\(retryCount + 1)/\(NetworkConfig.maxRetryAttempts))...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + NetworkConfig.retryDelay) {
+                            self.performRequest(
+                                with: request,
+                                session: session,
+                                responseType: responseType,
+                                retryCount: retryCount + 1,
+                                completion: completion
+                            )
+                        }
+                        return
+                    }
+                    
+                    print("BŁĄD SIECIOWY: \(error.localizedDescription)")
+                    completion(.failure(NetworkError.networkError(error)))
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    completion(.failure(NetworkError.serverError("Nieprawidłowa odpowiedź serwera")))
+                    return
+                }
+                
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    let errorMessage = data.flatMap { String(data: $0, encoding: .utf8) } ?? "Kod błędu: \(httpResponse.statusCode)"
+                    print("BŁĄD SERWERA: \(errorMessage)")
+                    completion(.failure(NetworkError.serverError(errorMessage)))
+                    return
+                }
+                
+                guard let data = data else {
+                    completion(.failure(NetworkError.noData))
+                    return
+                }
+                
+                do {
+                    let result = try JSONDecoder().decode(responseType, from: data)
+                    print("SUKCES: Otrzymano wynik analizy.")
+                    completion(.success(result))
+                } catch {
+                    print("BŁĄD DEKODOWANIA JSON: \(error)")
+                    if let errorString = String(data: data, encoding: .utf8) {
+                        print("Serwer zwrócił: \(errorString)")
+                    }
+                    completion(.failure(NetworkError.decodingError(error)))
+                }
+            }
+        }.resume()
+    }
+    func analyzeImage(image: UIImage, targetBall: Point, pocket: Point, completion: @escaping (Result<AnalysisResult, Error>) -> Void) {
+        print("Rozpoczynam analizę... cel: \(targetBall), łuza: \(pocket)")
+        
+        guard let serverURL = URL(string: "\(NetworkConfig.serverBaseURL)/analyze") else {
+            completion(.failure(NetworkError.invalidURL))
+            return
+        }
+        
+        // 1. Przygotuj dane JSON do wysłania
+        let requestData = RequestData(target_ball: targetBall, pocket: pocket)
+        guard let jsonData = try? JSONEncoder().encode(requestData) else {
+            completion(.failure(NetworkError.encodingError))
+            return
+        }
+        
+        // 2. Przygotuj obraz
+        guard let (_, jpegData) = prepareImageForUpload(image) else {
+            completion(.failure(NetworkError.imageConversionError))
             return
         }
         
@@ -107,82 +258,44 @@ class NetworkManager {
         
         var body = Data()
         
-        // --- Część 1: Pole 'data' (JSON) ---
+        // Część 1: Pole 'data' (JSON)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"data\"\r\n\r\n".data(using: .utf8)!)
         body.append(jsonData)
         body.append("\r\n".data(using: .utf8)!)
         
-        // --- Część 2: Pole 'file' (Obraz) ---
+        // Część 2: Pole 'file' (Obraz)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
         body.append(jpegData)
         body.append("\r\n".data(using: .utf8)!)
         
-        // --- Zakończenie ---
+        // Zakończenie
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         
         request.httpBody = body
         
-        // 4. Wyślij żądanie
-        urlSession.dataTask(with: request) { data, response, error in
-            // Przełącz z powrotem na główny wątek, aby zaktualizować UI
-            DispatchQueue.main.async {
-                if let error = error {
-                    print("BŁĄD SIECIOWY: \(error.localizedDescription)")
-                    completion(.failure(error))
-                    return
-                }
-                
-                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-                    print("BŁĄD SERWERA: \(response.debugDescription)")
-                    if let data = data, let errorString = String(data: data, encoding: .utf8) {
-                        print("Odpowiedź serwera: \(errorString)")
-                        completion(.failure(NSError(domain: "NetworkManager", code: -4, userInfo: [NSLocalizedDescriptionKey: "Błąd serwera: \(errorString)"])))
-                    } else {
-                        completion(.failure(NSError(domain: "NetworkManager", code: -4, userInfo: [NSLocalizedDescriptionKey: "Błąd serwera (kod inny niż 2xx)"])))
-                    }
-                    return
-                }
-                
-                guard let data = data else {
-                    completion(.failure(NSError(domain: "NetworkManager", code: -5, userInfo: [NSLocalizedDescriptionKey: "Brak danych w odpowiedzi"])))
-                    return
-                }
-                
-                // 5. Zdekoduj odpowiedź JSON
-                do {
-                    let analysisResult = try JSONDecoder().decode(AnalysisResult.self, from: data)
-                    print("SUKCES: Otrzymano wynik analizy.")
-                    completion(.success(analysisResult))
-                } catch {
-                    print("BŁĄD DEKODOWANIA JSON: \(error)")
-                    // Spróbuj wydrukować, co serwer faktycznie odesłał
-                    if let errorString = String(data: data, encoding: .utf8) {
-                        print("Serwer zwrócił (błąd dekodowania): \(errorString)")
-                    }
-                    completion(.failure(error))
-                }
-            }
-        }.resume()
+        // 4. Wyślij żądanie z retry logic
+        performRequest(
+            with: request,
+            session: aiURLSession,
+            responseType: AnalysisResult.self,
+            completion: completion
+        )
     }
-    // === DODAJ CAŁĄ TĘ NOWĄ FUNKCJĘ ===
-
     func calculateManual(whiteBall: Point, targetBall: Point, pocket: Point, completion: @escaping (Result<AnalysisResult, Error>) -> Void) {
-
         print("Rozpoczynam analizę RĘCZNĄ... biała: \(whiteBall), cel: \(targetBall), łuza: \(pocket)")
 
-        // Używamy nowego adresu URL
-        guard let serverURL = URL(string: serverURLString.replacingOccurrences(of: "/analyze", with: "/calculate_manual")) else {
-            completion(.failure(NSError(domain: "NetworkManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nieprawidłowy adres URL serwera (/calculate_manual)"])))
+        guard let serverURL = URL(string: "\(NetworkConfig.serverBaseURL)/calculate_manual") else {
+            completion(.failure(NetworkError.invalidURL))
             return
         }
 
         // 1. Przygotuj dane JSON (3 punkty)
         let requestData = RequestDataManual(white_ball: whiteBall, target_ball: targetBall, pocket: pocket)
         guard let jsonData = try? JSONEncoder().encode(requestData) else {
-            completion(.failure(NSError(domain: "NetworkManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "Nie udało się zakodować danych do JSON"])))
+            completion(.failure(NetworkError.encodingError))
             return
         }
 
@@ -192,45 +305,13 @@ class NetworkManager {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = jsonData
 
-        // 3. Wyślij żądanie (użyj naszej sesji z limitem czasu)
-        urlSession.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    print("BŁĄD SIECIOWY (RĘCZNY): \(error.localizedDescription)")
-                    completion(.failure(error))
-                    return
-                }
-
-                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-                    print("BŁĄD SERWERA (RĘCZNY): \(response.debugDescription)")
-                    if let data = data, let errorString = String(data: data, encoding: .utf8) {
-                        print("Odpowiedź serwera: \(errorString)")
-                        completion(.failure(NSError(domain: "NetworkManager", code: -4, userInfo: [NSLocalizedDescriptionKey: "Błąd serwera: \(errorString)"])))
-                    } else {
-                        completion(.failure(NSError(domain: "NetworkManager", code: -4, userInfo: [NSLocalizedDescriptionKey: "Błąd serwera (kod inny niż 2xx)"])))
-                    }
-                    return
-                }
-
-                guard let data = data else {
-                    completion(.failure(NSError(domain: "NetworkManager", code: -5, userInfo: [NSLocalizedDescriptionKey: "Brak danych w odpowiedzi"])))
-                    return
-                }
-
-                // 5. Zdekoduj odpowiedź JSON (używamy tej samej struktury AnalysisResult)
-                do {
-                    let analysisResult = try JSONDecoder().decode(AnalysisResult.self, from: data)
-                    print("SUKCES (RĘCZNY): Otrzymano wynik analizy.")
-                    completion(.success(analysisResult))
-                } catch {
-                    print("BŁĄD DEKODOWANIA JSON (RĘCZNY): \(error)")
-                    if let errorString = String(data: data, encoding: .utf8) {
-                        print("Serwer zwrócił (błąd dekodowania): \(errorString)")
-                    }
-                    completion(.failure(error))
-                }
-            }
-        }.resume()
+        // 3. Wyślij żądanie z retry logic
+        performRequest(
+            with: request,
+            session: manualURLSession,
+            responseType: AnalysisResult.self,
+            completion: completion
+        )
     }
 }
 
