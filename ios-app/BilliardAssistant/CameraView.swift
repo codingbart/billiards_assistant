@@ -8,6 +8,7 @@ struct CameraView: View {
     // Zmienna do komunikacji z Koordynatorem kamery
     // Musimy ją przechowywać w stanie, aby jej nie utracić
     @StateObject private var cameraCoordinator = CameraViewController.Coordinator()
+    //asdasd
     @State private var isAutoMode = true
     @State private var whiteBallPosition: CGPoint?
     @State private var targetBallPosition: CGPoint?
@@ -279,11 +280,7 @@ struct CameraView: View {
                     self.targetBallPosition = nil
                     self.pocketPosition = nil
                 case .failure(let error):
-                    if let networkError = error as? NetworkError {
-                        self.errorMessage = networkError.errorDescription ?? "Błąd analizy AI"
-                    } else {
-                        self.errorMessage = "Błąd analizy AI: \(error.localizedDescription)"
-                    }
+                    self.errorMessage = "Błąd analizy AI: \(error.localizedDescription)"
                 }
             }
             
@@ -301,11 +298,7 @@ struct CameraView: View {
                     self.targetBallPosition = nil
                     self.pocketPosition = nil
                 case .failure(let error):
-                    if let networkError = error as? NetworkError {
-                        self.errorMessage = networkError.errorDescription ?? "Błąd analizy ręcznej"
-                    } else {
-                        self.errorMessage = "Błąd analizy ręcznej: \(error.localizedDescription)"
-                    }
+                    self.errorMessage = "Błąd analizy ręcznej: \(error.localizedDescription)"
                 }
             }
         }
