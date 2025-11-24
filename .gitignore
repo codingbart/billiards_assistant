@@ -12,3 +12,5 @@ yarn-error.log
 static/uploads/*
 # OS
 .DS_Store
+
+.env
