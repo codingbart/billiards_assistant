@@ -15,3 +15,5 @@ static/uploads/*
 
 .env.example
 .env
+python-backed/.env
+
