@@ -17,3 +17,5 @@ static/uploads/*
 .env
 python-backed/.env
 
+python-backed/.env
+python-backed/.env

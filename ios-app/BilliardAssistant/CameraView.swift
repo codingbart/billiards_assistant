@@ -3,42 +3,64 @@ import SwiftUI
 struct CameraView: View {
     
     @State private var capturedImage: UIImage?
-    
     @StateObject private var cameraCoordinator = CameraViewController.Coordinator()
-    @State private var isAutoMode = true
-    @State private var whiteBallPosition: CGPoint?
-    @State private var targetBallPosition: CGPoint?
-    @State private var pocketPosition: CGPoint?
     
-    @State private var whiteBallPoint: Point?
-    @State private var targetBallPoint: Point?
-    @State private var pocketPoint: Point?
+    // --- Nowe Stany ---
+    @State private var pockets: [CGPoint] = [] // Lista zaznaczonych łuz
+    @State private var bestShotResult: BestShotResult? // Wynik z serwera
+    
+    // Obszar stołu (4 narożniki prostokąta)
+    @State private var tableAreaStart: CGPoint? = nil
+    @State private var tableAreaEnd: CGPoint? = nil
+    @State private var isSelectingTableArea = false
+    @State private var isEditingTableArea = false
+    @State private var dragHandle: TableAreaHandle? = nil // Który element jest przeciągany
+    @State private var dragStartPoint: CGPoint? = nil // Punkt początkowy przeciągania (współrzędne obrazu)
+    
+    enum TableAreaHandle {
+        case topLeft, topRight, bottomLeft, bottomRight, center
+    }
+    
+    // Kolor bili cue
+    @State private var cueBallColor = "White"
+    let availableColors = ["White", "Red", "Yellow", "Blue", "Green", "Orange", "Purple", "Pink"]
     
     @State private var networkManager = NetworkManager()
-    @State private var analysisResult: AnalysisResult?
     @State private var isLoading = false
     @State private var errorMessage: String?
     
-    @GestureState private var dragLocation: CGPoint = .zero
-    @State private var isDragging = false
-    
     var body: some View {
-        let loupeOffset: CGFloat = -100.0
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
             if capturedImage == nil {
+                // 1. TRYB APARATU
                 CameraViewController(capturedImage: $capturedImage, coordinator: cameraCoordinator)
                     .edgesIgnoringSafeArea(.all)
+                    .overlay(
+                        VStack {
+                            Spacer()
+                            Text("Zrób zdjęcie stołu")
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.black.opacity(0.5))
+                                .cornerRadius(10)
+                                .padding(.bottom, 80)
+                        }
+                    )
+                
+                // Przycisk migawki
+                VStack {
+                    Spacer()
+                    Button(action: { cameraCoordinator.capturePhoto() }) {
+                        Circle().stroke(Color.white, lineWidth: 4).frame(width: 75, height: 75)
+                    }.padding(.bottom, 30)
+                }
+                
             } else {
+                // 2. TRYB ANALIZY (Na zrobionym zdjęciu)
                 GeometryReader { geometry in
                     let (scale, offset) = calculateScaleAndOffset(imageSize: capturedImage?.size ?? .zero, viewSize: geometry.size)
-                    let imageFrame = CGRect(
-                        x: offset.x,
-                        y: offset.y,
-                        width: (capturedImage?.size.width ?? 0) * scale,
-                        height: (capturedImage?.size.height ?? 0) * scale
-                    )
                     
                     ZStack {
                         if let image = capturedImage {
@@ -46,305 +68,354 @@ struct CameraView: View {
                                 .resizable()
                                 .scaledToFit()
                                 .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                            
-                            if let whiteBallPosition {
-                                Circle().fill(Color.blue.opacity(0.7)).frame(width: 20, height: 20).position(whiteBallPosition)
-                            }
-                            if let targetBallPosition {
-                                Circle().fill(Color.red.opacity(0.7)).frame(width: 20, height: 20).position(targetBallPosition)
-                            }
-                            if let pocketPosition {
-                                Image(systemName: "xmark.circle.fill").font(.title).foregroundColor(.green.opacity(0.7))
-                                    .background(Color.white.opacity(0.5).clipShape(Circle()))
-                                    .frame(width: 30, height: 30).position(pocketPosition)
-                            }
-                            
-                            if let result = analysisResult {
-                                drawAnalysisLines(result: result, scale: scale, offset: offset)
-                            }
-                            
-                            if isDragging {
-                                MagnifyingLoupeView(
-                                    image: image,
-                                    touchPoint: dragLocation,
-                                    imageFrame: imageFrame
+                                // Obsługa kliknięć (dodawanie łuz) - tylko gdy nie zaznaczamy obszaru
+                                .onTapGesture { location in
+                                    if bestShotResult == nil && !isSelectingTableArea && !isEditingTableArea {
+                                        if let imgPoint = convertFromViewToImage(point: location, imageSize: image.size, viewSize: geometry.size) {
+                                            let p = CGPoint(x: imgPoint.x, y: imgPoint.y)
+                                            pockets.append(p)
+                                        }
+                                    }
+                                }
+                                // Obsługa przeciągania - tylko gdy zaznaczamy lub edytujemy obszar
+                                .gesture(
+                                    DragGesture(minimumDistance: 5)
+                                        .onChanged { value in
+                                            if bestShotResult == nil {
+                                                if isSelectingTableArea {
+                                                    // Nowe zaznaczenie
+                                                    if let imgPoint = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
+                                                        tableAreaStart = CGPoint(x: imgPoint.x, y: imgPoint.y)
+                                                    }
+                                                    if let imgPoint = convertFromViewToImage(point: value.location, imageSize: image.size, viewSize: geometry.size) {
+                                                        tableAreaEnd = CGPoint(x: imgPoint.x, y: imgPoint.y)
+                                                    }
+                                                } else if isEditingTableArea, let start = tableAreaStart, let end = tableAreaEnd {
+                                                    // Edycja istniejącego obszaru
+                                                    if let imgPoint = convertFromViewToImage(point: value.location, imageSize: image.size, viewSize: geometry.size) {
+                                                        if dragHandle == nil {
+                                                            // Sprawdź, który element został kliknięty (tylko przy pierwszym onChanged)
+                                                            let viewStart = convertFromImageToView(point: Point(x: Int(start.x), y: Int(start.y)), scale: scale, offset: offset)
+                                                            let viewEnd = convertFromImageToView(point: Point(x: Int(end.x), y: Int(end.y)), scale: scale, offset: offset)
+                                                            let rect = CGRect(
+                                                                x: min(viewStart.x, viewEnd.x),
+                                                                y: min(viewStart.y, viewEnd.y),
+                                                                width: abs(viewEnd.x - viewStart.x),
+                                                                height: abs(viewEnd.y - viewStart.y)
+                                                            )
+                                                            
+                                                            let handleSize: CGFloat = 30
+                                                            let startLoc = value.startLocation
+                                                            
+                                                            if abs(startLoc.x - rect.minX) < handleSize && abs(startLoc.y - rect.minY) < handleSize {
+                                                                dragHandle = .topLeft
+                                                                if let startImg = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
+                                                                    dragStartPoint = CGPoint(x: CGFloat(startImg.x), y: CGFloat(startImg.y))
+                                                                }
+                                                            } else if abs(startLoc.x - rect.maxX) < handleSize && abs(startLoc.y - rect.minY) < handleSize {
+                                                                dragHandle = .topRight
+                                                                if let startImg = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
+                                                                    dragStartPoint = CGPoint(x: CGFloat(startImg.x), y: CGFloat(startImg.y))
+                                                                }
+                                                            } else if abs(startLoc.x - rect.minX) < handleSize && abs(startLoc.y - rect.maxY) < handleSize {
+                                                                dragHandle = .bottomLeft
+                                                                if let startImg = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
+                                                                    dragStartPoint = CGPoint(x: CGFloat(startImg.x), y: CGFloat(startImg.y))
+                                                                }
+                                                            } else if abs(startLoc.x - rect.maxX) < handleSize && abs(startLoc.y - rect.maxY) < handleSize {
+                                                                dragHandle = .bottomRight
+                                                                if let startImg = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
+                                                                    dragStartPoint = CGPoint(x: CGFloat(startImg.x), y: CGFloat(startImg.y))
+                                                                }
+                                                            } else if rect.contains(startLoc) {
+                                                                dragHandle = .center
+                                                                if let startImg = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
+                                                                    dragStartPoint = CGPoint(x: CGFloat(startImg.x), y: CGFloat(startImg.y))
+                                                                }
+                                                            }
+                                                        }
+                                                        
+                                                        // Aktualizuj pozycję na podstawie delty od początku przeciągania
+                                                        if let handle = dragHandle, let dragStart = dragStartPoint {
+                                                            let deltaX = imgPoint.x - dragStart.x
+                                                            let deltaY = imgPoint.y - dragStart.y
+                                                            
+                                                            switch handle {
+                                                            case .topLeft:
+                                                                tableAreaStart = CGPoint(x: start.x + deltaX, y: start.y + deltaY)
+                                                            case .topRight:
+                                                                tableAreaEnd = CGPoint(x: end.x + deltaX, y: end.y + deltaY)
+                                                            case .bottomLeft:
+                                                                tableAreaStart = CGPoint(x: start.x + deltaX, y: start.y + deltaY)
+                                                            case .bottomRight:
+                                                                tableAreaEnd = CGPoint(x: end.x + deltaX, y: end.y + deltaY)
+                                                            case .center:
+                                                                tableAreaStart = CGPoint(x: start.x + deltaX, y: start.y + deltaY)
+                                                                tableAreaEnd = CGPoint(x: end.x + deltaX, y: end.y + deltaY)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .onEnded { value in
+                                            if isSelectingTableArea {
+                                                isSelectingTableArea = false
+                                                isEditingTableArea = true // Po zaznaczeniu, włącz tryb edycji
+                                            }
+                                            dragHandle = nil
+                                            dragStartPoint = nil
+                                        }
                                 )
-                                .position(x: dragLocation.x, y: dragLocation.y + loupeOffset)
+                            
+                            // Rysowanie zaznaczonych ŁUZ (zielone kółka)
+                            ForEach(0..<pockets.count, id: \.self) { i in
+                                let p = pockets[i]
+                                let viewP = convertFromImageToView(point: Point(x: Int(p.x), y: Int(p.y)), scale: scale, offset: offset)
+                                Circle()
+                                    .fill(Color.green.opacity(0.6))
+                                    .frame(width: 30, height: 30)
+                                    .position(viewP)
+                            }
+                            
+                            // Rysowanie obszaru stołu (niebieski prostokąt z uchwytami)
+                            if let start = tableAreaStart, let end = tableAreaEnd {
+                                let viewStart = convertFromImageToView(point: Point(x: Int(start.x), y: Int(start.y)), scale: scale, offset: offset)
+                                let viewEnd = convertFromImageToView(point: Point(x: Int(end.x), y: Int(end.y)), scale: scale, offset: offset)
+                                
+                                let rect = CGRect(
+                                    x: min(viewStart.x, viewEnd.x),
+                                    y: min(viewStart.y, viewEnd.y),
+                                    width: abs(viewEnd.x - viewStart.x),
+                                    height: abs(viewEnd.y - viewStart.y)
+                                )
+                                
+                                ZStack {
+                                    // Tło prostokąta
+                                    Rectangle()
+                                        .fill(Color.blue.opacity(0.2))
+                                    Rectangle()
+                                        .stroke(Color.blue.opacity(0.8), lineWidth: 3)
+                                    
+                                    // Uchwyty do edycji (tylko w trybie edycji)
+                                    if isEditingTableArea {
+                                        // Narożniki
+                                        Circle().fill(Color.orange).frame(width: 20, height: 20).position(x: rect.minX, y: rect.minY)
+                                        Circle().fill(Color.orange).frame(width: 20, height: 20).position(x: rect.maxX, y: rect.minY)
+                                        Circle().fill(Color.orange).frame(width: 20, height: 20).position(x: rect.minX, y: rect.maxY)
+                                        Circle().fill(Color.orange).frame(width: 20, height: 20).position(x: rect.maxX, y: rect.maxY)
+                                    }
+                                }
+                                .frame(width: rect.width, height: rect.height)
+                                .position(x: rect.midX, y: rect.midY)
+                            }
+                            
+                            // Rysowanie WYNIKU (jeśli jest)
+                            if let result = bestShotResult {
+                                drawBestShot(result: result, scale: scale, offset: offset)
                             }
                         }
-                    } 
-                    .gesture(
-                        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                            .updating($dragLocation) { value, state, _ in
-                                state = value.location
-                            }
-                            .onChanged { _ in
-                                if !self.isDragging {
-                                    self.isDragging = true
-                                    self.analysisResult = nil 
-                                    self.errorMessage = nil
+                    }
+                }
+                
+                // Interfejs (Przyciski na dole)
+                VStack {
+                    // Górny panel - wybór koloru bili cue
+                    if bestShotResult == nil {
+                        HStack {
+                            Text("Bila cue:")
+                                .foregroundColor(.white)
+                                .font(.caption)
+                            
+                            Picker("Kolor", selection: $cueBallColor) {
+                                ForEach(availableColors, id: \.self) { color in
+                                    Text(color).tag(color)
                                 }
                             }
-                            .onEnded { value in
-                                self.isDragging = false
-                                
-                                let loupeCrosshairLocation = CGPoint(x: value.location.x, y: value.location.y + loupeOffset)
-                                
-                                let clampedX = min(max(loupeCrosshairLocation.x, imageFrame.minX), imageFrame.maxX)
-                                let clampedY = min(max(loupeCrosshairLocation.y, imageFrame.minY), imageFrame.maxY)
-                                let clampedLocation = CGPoint(x: clampedX, y: clampedY)
-                                
-                                handleSelection(at: clampedLocation, in: geometry.size)
-                            }
-                    )
-                } 
-            }
-            
-            VStack {
-                if capturedImage != nil {
-                    HStack {
-                        Button(action: {
-                            resetAll()
-                        }) {
-                            Image(systemName: "arrow.left")
-                                .font(.title)
+                            .pickerStyle(.menu)
+                            .foregroundColor(.white)
+                            .background(Color.blue.opacity(0.7))
+                            .cornerRadius(8)
+                            
+                            Spacer()
+                            
+                            // Przycisk zaznaczania/edycji obszaru stołu
+                            Button(action: {
+                                if tableAreaStart != nil && tableAreaEnd != nil {
+                                    // Jeśli obszar już istnieje, przełącz tryb edycji
+                                    isEditingTableArea.toggle()
+                                    isSelectingTableArea = false
+                                } else {
+                                    // Jeśli nie ma obszaru, zacznij zaznaczanie
+                                    isSelectingTableArea.toggle()
+                                    isEditingTableArea = false
+                                }
+                                if !isSelectingTableArea && !isEditingTableArea {
+                                    tableAreaStart = nil
+                                    tableAreaEnd = nil
+                                }
+                            }) {
+                                HStack {
+                                    Image(systemName: (isSelectingTableArea || isEditingTableArea) ? "checkmark.square.fill" : "square")
+                                    Text(isSelectingTableArea ? "Zaznacz" : (isEditingTableArea ? "Edytuj obszar" : "Obszar stołu"))
+                                        .font(.caption)
+                                }
                                 .foregroundColor(.white)
-                                .padding()
-                                .background(Color.black.opacity(0.5))
-                                .clipShape(Circle())
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background((isSelectingTableArea || isEditingTableArea) ? Color.orange.opacity(0.8) : Color.gray.opacity(0.7))
+                                .cornerRadius(8)
+                            }
                         }
-                        .padding(.leading)
-                        
-                        Spacer()
-                    }
-                    .padding(.top, 50)
-                }
-                
-                if capturedImage != nil {
-                    if let errorMessage {
-                        Text(errorMessage).padding().background(Color.red).foregroundColor(.white).cornerRadius(10)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
                     }
                     
-                    VStack {
-                        Toggle("Tryb Automatyczny (AI)", isOn: $isAutoMode.animation())
-                            .foregroundColor(.white)
-                            .padding(.horizontal)
-                        
-                        Text(getInstructionText())
-                            .foregroundColor(.white)
-                            .font(.footnote)
-                            .padding(8)
-                            .background(Color.black.opacity(0.5))
-                            .cornerRadius(8)
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.3))
-                    .cornerRadius(10)
-                    .padding(.top, 30)
-                }
-                
-                Spacer()
-                
-                Button(action: {
-                    if capturedImage == nil {
-                        cameraCoordinator.capturePhoto()
+                    // Instrukcje / Błędy
+                    if let errorMessage {
+                        Text(errorMessage).padding().background(Color.red).foregroundColor(.white).cornerRadius(10)
+                    } else if bestShotResult == nil {
+                        if isSelectingTableArea {
+                            Text("Przeciągnij, aby zaznaczyć obszar stołu")
+                                .padding().background(Color.orange.opacity(0.8)).foregroundColor(.white).cornerRadius(10)
+                        } else if isEditingTableArea {
+                            Text("Przeciągnij narożniki lub środek, aby dopasować obszar")
+                                .padding().background(Color.orange.opacity(0.8)).foregroundColor(.white).cornerRadius(10)
+                        } else {
+                            Text("Kliknij na wszystkie łuzy (\(pockets.count))")
+                                .padding().background(Color.black.opacity(0.5)).foregroundColor(.white).cornerRadius(10)
+                        }
                     } else {
-                        sendAnalysisRequest()
+                        Text("Najłatwiejszy strzał (Kąt: \(String(format: "%.1f", bestShotResult!.best_shot.angle))°)")
+                            .padding().background(Color.green).foregroundColor(.white).cornerRadius(10)
                     }
-                }) {
-                    ZStack {
-                        Circle().fill(Color.white).frame(width: 65, height: 65)
-                        Circle().stroke(Color.white, lineWidth: 4).frame(width: 75, height: 75)
-                        if isLoading {
-                            ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .blue)).scaleEffect(2.0)
+                    
+                    Spacer()
+                    
+                    HStack {
+                        // Przycisk "Reset / Nowe zdjęcie"
+                        Button(action: resetAll) {
+                            Image(systemName: "trash").font(.title).foregroundColor(.white)
+                                .padding().background(Color.red.opacity(0.8)).clipShape(Circle())
+                        }
+                        
+                        Spacer()
+                        
+                        // Przycisk "Skanuj" (aktywny tylko gdy są łuzy)
+                        if bestShotResult == nil {
+                            Button(action: scanTable) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 20).fill(Color.blue).frame(width: 150, height: 50)
+                                    if isLoading {
+                                        ProgressView().tint(.white)
+                                    } else {
+                                        Text("SKANUJ STÓŁ").foregroundColor(.white).bold()
+                                    }
+                                }
+                            }
+                            .disabled(pockets.isEmpty || isLoading)
+                            .opacity(pockets.isEmpty ? 0.5 : 1.0)
                         }
                     }
+                    .padding(.horizontal, 30)
+                    .padding(.bottom, 30)
                 }
-                .padding(.bottom, 30)
-                .disabled(isLoading)
             }
         }
     }
     
+    // --- FUNKCJE ---
     
-    func resetAll() {
-        capturedImage = nil
-        analysisResult = nil
-        errorMessage = nil
-        isLoading = false
-        
-        whiteBallPosition = nil
-        targetBallPosition = nil
-        pocketPosition = nil
-        
-        whiteBallPoint = nil
-        targetBallPoint = nil
-        pocketPoint = nil
-    }
-
-    func handleSelection(at location: CGPoint, in viewSize: CGSize) {
+    func scanTable() {
         guard let image = capturedImage else { return }
-        
-        guard let imagePoint = convertFromViewToImage(point: location, imageSize: image.size, viewSize: viewSize) else {
-            print("Puszczono palec poza obrazkiem")
-            return
-        }
-        
-        analysisResult = nil
-        errorMessage = nil
-
-        if isAutoMode {
-            if targetBallPosition == nil {
-                targetBallPosition = location
-                targetBallPoint = imagePoint
-                pocketPosition = nil
-                pocketPoint = nil
-            } else if pocketPosition == nil {
-                pocketPosition = location
-                pocketPoint = imagePoint
-            } else {
-                targetBallPosition = location
-                targetBallPoint = imagePoint
-                pocketPosition = nil
-                pocketPoint = nil
-            }
-            whiteBallPosition = nil
-            whiteBallPoint = nil
-            
-        } else {
-            if whiteBallPosition == nil {
-                whiteBallPosition = location
-                whiteBallPoint = imagePoint
-                targetBallPosition = nil
-                targetBallPoint = nil
-                pocketPosition = nil
-                pocketPoint = nil
-                
-            } else if targetBallPosition == nil {
-                targetBallPosition = location
-                targetBallPoint = imagePoint
-                
-            } else if pocketPosition == nil {
-                pocketPosition = location
-                pocketPoint = imagePoint
-                
-            } else {
-                whiteBallPosition = location
-                whiteBallPoint = imagePoint
-                targetBallPosition = nil
-                targetBallPoint = nil
-                pocketPosition = nil
-                pocketPoint = nil
-            }
-        }
-    }
-    
-    func sendAnalysisRequest() {
         isLoading = true
         errorMessage = nil
         
-        if isAutoMode {
-            guard let image = capturedImage else { self.errorMessage = "Brak obrazu"; isLoading = false; return }
-            guard let targetPoint = targetBallPoint else { self.errorMessage = "Wybierz bilę DOCELOWĄ"; isLoading = false; return }
-            guard let pocketPoint = pocketPoint else { self.errorMessage = "Wybierz ŁUZĘ"; isLoading = false; return }
-            
-            networkManager.analyzeImage(image: image, targetBall: targetPoint, pocket: pocketPoint) { result in
-                isLoading = false
-                switch result {
-                case .success(let analysis):
-                    self.analysisResult = analysis
-                    self.whiteBallPosition = nil
-                    self.targetBallPosition = nil
-                    self.pocketPosition = nil
-                case .failure(let error):
-                    if let networkError = error as? NetworkError {
-                        self.errorMessage = networkError.errorDescription ?? "Błąd analizy AI"
-                    } else {
-                        self.errorMessage = "Błąd analizy AI: \(error.localizedDescription)"
-                    }
-                }
-            }
-            
-        } else {
-            guard let whitePoint = whiteBallPoint else { self.errorMessage = "Wybierz BIAŁĄ bilę"; isLoading = false; return }
-            guard let targetPoint = targetBallPoint else { self.errorMessage = "Wybierz bilę DOCELOWĄ"; isLoading = false; return }
-            guard let pocketPoint = pocketPoint else { self.errorMessage = "Wybierz ŁUZĘ"; isLoading = false; return }
-            
-            networkManager.calculateManual(whiteBall: whitePoint, targetBall: targetPoint, pocket: pocketPoint) { result in
-                isLoading = false
-                switch result {
-                case .success(let analysis):
-                    self.analysisResult = analysis
-                    self.whiteBallPosition = nil
-                    self.targetBallPosition = nil
-                    self.pocketPosition = nil
-                case .failure(let error):
-                    if let networkError = error as? NetworkError {
-                        self.errorMessage = networkError.errorDescription ?? "Błąd analizy ręcznej"
-                    } else {
-                        self.errorMessage = "Błąd analizy ręcznej: \(error.localizedDescription)"
-                    }
-                }
+        // Przygotuj obszar stołu (4 narożniki prostokąta)
+        var tableArea: [CGPoint]? = nil
+        if let start = tableAreaStart, let end = tableAreaEnd {
+            // Tworzymy 4 narożniki prostokąta
+            tableArea = [
+                CGPoint(x: min(start.x, end.x), y: min(start.y, end.y)), // lewy górny
+                CGPoint(x: max(start.x, end.x), y: min(start.y, end.y)), // prawy górny
+                CGPoint(x: max(start.x, end.x), y: max(start.y, end.y)), // prawy dolny
+                CGPoint(x: min(start.x, end.x), y: max(start.y, end.y))  // lewy dolny
+            ]
+        }
+        
+        // Wysyłamy oryginalne współrzędne łuz i obszaru stołu (na obrazku)
+        // NetworkManager sam je przeskaluje
+        networkManager.analyzeBestShot(
+            image: image,
+            pockets: pockets,
+            imageSize: image.size,
+            tableArea: tableArea,
+            cueBallColor: cueBallColor
+        ) { result in
+            isLoading = false
+            switch result {
+            case .success(let data):
+                self.bestShotResult = data
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
             }
         }
     }
     
-    
-    func getInstructionText() -> String {
-        if isAutoMode {
-            if targetBallPoint == nil {
-                return "Tryb AI: Wybierz BILĘ DOCELOWĄ"
-            } else if pocketPoint == nil {
-                return "Tryb AI: Wybierz ŁUZĘ"
-            } else {
-                return "Gotowy do analizy!"
-            }
-        } else {
-            if whiteBallPoint == nil {
-                return "Tryb Ręczny: Wybierz BIAŁĄ BILĘ"
-            } else if targetBallPoint == nil {
-                return "Tryb Ręczny: Wybierz BILĘ DOCELOWĄ"
-            } else if pocketPoint == nil {
-                return "Tryb Ręczny: Wybierz ŁUZĘ"
-            } else {
-                return "Gotowy do analizy!"
-            }
-        }
+    func resetAll() {
+        capturedImage = nil
+        pockets.removeAll()
+        bestShotResult = nil
+        errorMessage = nil
+        isLoading = false
+        tableAreaStart = nil
+        tableAreaEnd = nil
+        isSelectingTableArea = false
+        isEditingTableArea = false
+        dragHandle = nil
+        dragStartPoint = nil
+        cueBallColor = "White"
     }
     
+    // Rysowanie linii najlepszego strzału
     @ViewBuilder
-    func drawAnalysisLines(result: AnalysisResult, scale: CGFloat, offset: CGPoint) -> some View {
-        if let line = result.shot_lines.first {
-            let startPoint = convertFromImageToView(point: line.start, scale: scale, offset: offset)
-            let endPoint = convertFromImageToView(point: line.end, scale: scale, offset: offset)
-            Path { path in
-                path.move(to: startPoint)
-                path.addLine(to: endPoint)
-            }
-            .stroke(Color.green.opacity(0.6), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+    func drawBestShot(result: BestShotResult, scale: CGFloat, offset: CGPoint) -> some View {
+        let shot = result.best_shot
+        
+        // Linia Cel -> Łuza (Zielona)
+        if let line1 = shot.shot_lines.first {
+            let start = convertFromImageToView(point: line1.start, scale: scale, offset: offset)
+            let end = convertFromImageToView(point: line1.end, scale: scale, offset: offset)
+            Path { p in p.move(to: start); p.addLine(to: end) }
+                .stroke(Color.green, lineWidth: 3)
         }
         
-        if result.shot_lines.count > 1 {
-            let line = result.shot_lines[1]
-            let startPoint = convertFromImageToView(point: line.start, scale: scale, offset: offset)
-            let endPoint = convertFromImageToView(point: line.end, scale: scale, offset: offset)
+        // Linia Biała -> Duch (Biała przerywana)
+        if shot.shot_lines.count > 1 {
+            let line2 = shot.shot_lines[1]
+            let start = convertFromImageToView(point: line2.start, scale: scale, offset: offset)
+            let end = convertFromImageToView(point: line2.end, scale: scale, offset: offset)
+            Path { p in p.move(to: start); p.addLine(to: end) }
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 3, dash: [10]))
+        }
+        
+        // Bila Duch (Kółko)
+        let ghostCenter = convertFromImageToView(point: shot.ghost_ball.center, scale: scale, offset: offset)
+        let r = CGFloat(shot.ghost_ball.radius) * scale
+        Circle().stroke(Color.white, lineWidth: 2)
+            .frame(width: r*2, height: r*2).position(ghostCenter)
             
-            Path { path in
-                path.move(to: startPoint)
-                path.addLine(to: endPoint)
-            }
-            .stroke(Color.red.opacity(0.8), style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [10, 5]))
-        }
+        // Oznacz Białą (Niebieska kropka)
+        let whiteCenter = convertFromImageToView(point: result.white_ball, scale: scale, offset: offset)
+        Circle().fill(Color.blue).frame(width: 15, height: 15).position(whiteCenter)
         
-        let ghostBall = result.ghost_ball
-        let centerPoint = convertFromImageToView(point: ghostBall.center, scale: scale, offset: offset)
-        let radius = CGFloat(ghostBall.radius) * scale
-        
-        Circle()
-            .stroke(Color.cyan.opacity(0.7), lineWidth: 3)
-            .frame(width: radius * 2, height: radius * 2)
-            .position(centerPoint)
+        // Oznacz wybraną Bilę Cel (Czerwona kropka)
+        let targetCenter = convertFromImageToView(point: shot.target_ball, scale: scale, offset: offset)
+        Circle().fill(Color.red).frame(width: 15, height: 15).position(targetCenter)
     }
+    
+    // (Tutaj wklej swoje stare funkcje pomocnicze: calculateScaleAndOffset, convertFromViewToImage, convertFromImageToView)
+    // One się nie zmieniły, więc możesz je skopiować ze starego pliku.
     
     func calculateScaleAndOffset(imageSize: CGSize, viewSize: CGSize) -> (scale: CGFloat, offset: CGPoint) {
         guard imageSize.width > 0, imageSize.height > 0 else { return (0, .zero) }
@@ -369,6 +440,13 @@ struct CameraView: View {
     }
     
     func convertFromImageToView(point: Point, scale: CGFloat, offset: CGPoint) -> CGPoint {
+        let viewX = (CGFloat(point.x) * scale) + offset.x
+        let viewY = (CGFloat(point.y) * scale) + offset.y
+        return CGPoint(x: viewX, y: viewY)
+    }
+    
+    // Potrzebne do konwersji Ball -> Point w funkcji drawBestShot
+    func convertFromImageToView(point: Ball, scale: CGFloat, offset: CGPoint) -> CGPoint {
         let viewX = (CGFloat(point.x) * scale) + offset.x
         let viewY = (CGFloat(point.y) * scale) + offset.y
         return CGPoint(x: viewX, y: viewY)
