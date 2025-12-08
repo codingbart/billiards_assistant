@@ -3,7 +3,7 @@ from roboflow import Roboflow
 import json
 import logging
 import os
-import cv2  # <--- TO JEST KONIECZNE, ABY FILTROWAĆ BŁĘDY SPOZA STOŁU
+import cv2
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,25 @@ ROBOFLOW_PROJECT = os.getenv('ROBOFLOW_PROJECT', 'billiarddet-kyjmh')
 ROBOFLOW_VERSION = int(os.getenv('ROBOFLOW_VERSION', '3'))
 
 _roboflow_model_cache = None
+
+# --- MAPOWANIE KLAS ROBOFLOW (wg Twojego zrzutu) ---
+# Klucze to kolory w aplikacji (lowercase), Wartości to klasy z Roboflow
+COLOR_MAPPING = {
+    # Bila biała
+    "white":  ["white"],
+    
+    # Bile pełne i połówki przypisane do kolorów
+    "yellow": ["n1", "n9"],   # 1 i 9
+    "blue":   ["n2", "n10"],  # 2 i 10
+    "red":    ["n3", "n11"],  # 3 i 11
+    "purple": ["n4", "n12"],  # 4 i 12
+    "orange": ["n5", "n13"],  # 5 i 13
+    "green":  ["n6", "n14"],  # 6 i 14
+    "brown":  ["n7", "n15"],  # 7 i 15
+    "black":  ["n8"]          # 8
+    
+    # Klasę "Billiard" ignorujemy, bo to prawdopodobnie stół lub śmieci
+}
 
 def _get_roboflow_model(api_key):
     global _roboflow_model_cache
@@ -28,51 +47,18 @@ def _get_roboflow_model(api_key):
 # --- FUNKCJE MATEMATYCZNE ---
 
 def is_point_inside_table(point, pockets):
-    """
-    Sprawdza, czy punkt (bila) znajduje się wewnątrz obszaru wyznaczonego przez łuzy.
-    Używa OpenCV pointPolygonTest.
-    Uwaga: Ta funkcja może być zbyt restrykcyjna - lepiej użyć table_area jeśli jest dostępny.
-    """
+    """Filtr oparty na łuzach - używany gdy nie ma zaznaczonego obszaru."""
     if len(pockets) < 3:
-        return True # Za mało łuz, by wyznaczyć obszar, więc akceptujemy wszystko
+        return True
     
-    # Tworzymy kontur z punktów łuz
     pocket_points = np.array([[p['x'], p['y']] for p in pockets], dtype=np.int32)
-    
-    # Obliczamy otoczkę wypukłą (Convex Hull) - to tworzy ładny wielokąt wokół łuz
     hull = cv2.convexHull(pocket_points)
     
-    # Sprawdzamy czy punkt jest wewnątrz
-    # True oznacza, że obliczamy dystans (ze znakiem)
+    # Tolerancja -50px (dla band)
     dist = cv2.pointPolygonTest(hull, (float(point['x']), float(point['y'])), True)
-    
-    # Zwiększona tolerancja: jeśli dist >= -50 (jest w środku lub max 50px na zewnątrz), to akceptujemy
-    # To pozwala na większą elastyczność, ponieważ łuzy są na krawędziach stołu
     return dist >= -50.0
 
-def is_point_inside_table_area(point, table_area):
-    """
-    Sprawdza, czy punkt znajduje się wewnątrz zaznaczonego obszaru stołu.
-    table_area: lista punktów narożników prostokąta [{"x": x1, "y": y1}, ...]
-    """
-    if not table_area or len(table_area) < 3:
-        return True  # Jeśli nie podano obszaru, akceptujemy wszystko
-    
-    # Tworzymy kontur z punktów obszaru stołu
-    area_points = np.array([[p['x'], p['y']] for p in table_area], dtype=np.int32)
-    
-    # Sprawdzamy czy punkt jest wewnątrz
-    dist = cv2.pointPolygonTest(area_points, (float(point['x']), float(point['y'])), True)
-    
-    # Jeśli dist >= 0 (jest w środku), to akceptujemy
-    return dist >= 0.0
-
 def calculate_cut_angle(white_pt, ghost_pt, pocket_pt):
-    """
-    Oblicza kąt cięcia (w stopniach).
-    0 stopni = strzał prosty (najłatwiejszy).
-    """
-    # Wektory
     v_shot = np.array([ghost_pt[0] - white_pt[0], ghost_pt[1] - white_pt[1]])
     v_pot = np.array([pocket_pt[0] - ghost_pt[0], pocket_pt[1] - ghost_pt[1]])
     
@@ -90,7 +76,6 @@ def calculate_cut_angle(white_pt, ghost_pt, pocket_pt):
     return np.degrees(angle_rad)
 
 def calculate_shot_lines(white_ball, target_ball, pocket, ball_radius=None):
-    """Generuje współrzędne linii i bili-ducha dla konkretnego strzału."""
     if ball_radius is None: ball_radius = DEFAULT_BALL_RADIUS
     
     P_pocket = np.array([pocket['x'], pocket['y']])
@@ -122,46 +107,29 @@ def calculate_shot_lines(white_ball, target_ball, pocket, ball_radius=None):
     return lines, ghost_ball_pos
 
 def find_best_shot(white_ball, other_balls, pockets, table_area=None):
-    """
-    Sprawdza wszystkie kombinacje i filtruje bile spoza stołu.
-    
-    Args:
-        white_ball: pozycja bili cue
-        other_balls: lista innych bil
-        pockets: lista łuz
-        table_area: opcjonalny obszar stołu - jeśli podany, używany zamiast filtrowania przez łuzy
-    """
     best_shot = None
     min_angle = 180.0
     
     if not white_ball or not other_balls or not pockets:
-        logger.warning(f"Brak danych: white_ball={white_ball is not None}, other_balls={len(other_balls) if other_balls else 0}, pockets={len(pockets) if pockets else 0}")
         return None
         
-    # === FILTRACJA: Odrzucamy bile spoza stołu ===
-    # Jeśli mamy table_area, używamy go (bardziej precyzyjne)
-    # W przeciwnym razie używamy łuz (mniej precyzyjne, ale lepsze niż nic)
+    valid_other_balls = []
+    
+    # 1. Priorytet: Filtrowanie obszarem (Table Area)
     if table_area and len(table_area) >= 3:
         valid_other_balls = [b for b in other_balls if is_point_inside_table_area(b, table_area)]
-        logger.info(f"Filtrowanie przez table_area: {len(other_balls)} wykrytych -> {len(valid_other_balls)} na stole")
-        # Jeśli wszystkie bile zostały odrzucone przez table_area, nie filtrujmy w ogóle
-        if not valid_other_balls:
-            logger.warning("Wszystkie bile zostały odrzucone przez table_area. Pomijam filtrowanie.")
-            valid_other_balls = other_balls
+        logger.info(f"Filtrowanie obszarem (Target): {len(other_balls)} -> {len(valid_other_balls)}")
+    
+    # 2. Alternatywa: Filtrowanie łuzami (jeśli brak obszaru)
+    elif len(pockets) >= 3:
+        valid_other_balls = [b for b in other_balls if is_point_inside_table(b, pockets)]
+        logger.info(f"Filtrowanie łuzami (Target): {len(other_balls)} -> {len(valid_other_balls)}")
     else:
-        # Filtrowanie przez łuzy - tylko jeśli mamy wystarczająco dużo łuz
-        if len(pockets) >= 3:
-            valid_other_balls = [b for b in other_balls if is_point_inside_table(b, pockets)]
-            logger.info(f"Filtrowanie przez łuzy: {len(other_balls)} wykrytych -> {len(valid_other_balls)} na stole")
-            # Jeśli wszystkie bile zostały odrzucone przez łuzy, nie filtrujmy w ogóle
-            # (może łuzy są źle zaznaczone)
-            if not valid_other_balls:
-                logger.warning("Wszystkie bile zostały odrzucone przez filtr łuz. Możliwe że łuzy są źle zaznaczone - pomijam filtrowanie.")
-                valid_other_balls = other_balls
-        else:
-            # Za mało łuz, nie filtrujmy
-            logger.info(f"Za mało łuz ({len(pockets)}), pomijam filtrowanie")
-            valid_other_balls = other_balls
+        valid_other_balls = other_balls
+
+    if not valid_other_balls:
+        logger.warning("Brak bil do wbicia po filtracji.")
+        return None
     
     P_white = np.array([white_ball['x'], white_ball['y']])
     
@@ -195,60 +163,132 @@ def find_best_shot(white_ball, other_balls, pockets, table_area=None):
                 
     return best_shot
 
-# --- DETEKCJA AI ---
+# (Zachowaj importy i mapowanie COLOR_MAPPING z poprzedniego kroku)
+# ...
 
-def detect_all_balls(image_path, api_key, cue_ball_color="White", table_area=None):
+def is_point_inside_table_area(point, table_area):
     """
-    Używa modelu YOLO z Roboflow do wykrywania bil na obrazie.
+    Filtr oparty na RĘCZNYM OBSZARZE (Żółta ramka).
+    Sprawdza czy cała bila (uwzględniając promień) jest wewnątrz obszaru.
+    """
+    if not table_area or len(table_area) < 3:
+        return True
     
-    Args:
-        image_path: ścieżka do obrazu
-        api_key: klucz API Roboflow
-        cue_ball_color: kolor bili cue (domyślnie "White", może być np. "Red", "Yellow", itp.)
-        table_area: opcjonalna lista punktów narożników obszaru stołu [{"x": x1, "y": y1}, ...]
-                    Jeśli podana, detekcje poza tym obszarem będą ignorowane
-    """
-    logger.info(f"Używam modelu detekcji YOLO z Roboflow (confidence={ROBOFLOW_CONFIDENCE})...")
-    logger.info(f"Szukam bili cue w kolorze: {cue_ball_color}")
-    if table_area:
-        logger.info(f"Filtrowanie detekcji w obszarze stołu: {len(table_area)} punktów")
-
+    area_points = np.array([[p['x'], p['y']] for p in table_area], dtype=np.int32)
+    
+    # Logowanie dla debugowania (tylko pierwsze kilka wywołań)
+    if not hasattr(is_point_inside_table_area, '_logged'):
+        logger.info(f"Obszar stołu: {len(table_area)} punktów")
+        for i, p in enumerate(table_area):
+            logger.info(f"  Punkt {i+1}: x={p.get('x')}, y={p.get('y')}")
+        is_point_inside_table_area._logged = True
+    
+    hull = cv2.convexHull(area_points)
+    
+    # Pobierz promień bili (domyślnie DEFAULT_BALL_RADIUS jeśli nie podano)
+    ball_radius = float(point.get('r', DEFAULT_BALL_RADIUS))
+    
+    # Sprawdź odległość środka bili od krawędzi obszaru
+    # cv2.pointPolygonTest zwraca:
+    # - dodatnią wartość: punkt wewnątrz (odległość od krawędzi)
+    # - 0: punkt na krawędzi
+    # - ujemną wartość: punkt poza obszarem (odległość od krawędzi)
+    point_x = float(point['x'])
+    point_y = float(point['y'])
+    dist = cv2.pointPolygonTest(hull, (point_x, point_y), True)
+    
+    # Cała bila jest wewnątrz, jeśli środek jest w odległości >= promienia od krawędzi
+    # Jeśli dist >= ball_radius, to cała bila jest wewnątrz obszaru
+    result = dist >= ball_radius
+    
+    # Logowanie dla pierwszych kilku punktów
+    if not hasattr(is_point_inside_table_area, '_point_count'):
+        is_point_inside_table_area._point_count = 0
+    if is_point_inside_table_area._point_count < 5:
+        logger.info(f"Punkt ({point_x:.1f}, {point_y:.1f}), promień={ball_radius:.1f}, dist={dist:.1f}, wynik={result}")
+        is_point_inside_table_area._point_count += 1
+    
+    return result
+def detect_all_balls(image_path, api_key, cue_ball_color="White", table_area=None):
+    logger.info(f"Detekcja YOLO... Szukam bili rozgrywającej: {cue_ball_color}")
+    
     try:
         model = _get_roboflow_model(api_key)
-        prediction = model.predict(image_path, confidence=ROBOFLOW_CONFIDENCE, overlap=ROBOFLOW_OVERLAP).json()
+        # Zmniejszyłem confidence do 10, żeby upewnić się, że model widzi wszystko
+        # Filtracja obszarem i tak odrzuci śmieci.
+        prediction = model.predict(image_path, confidence=10, overlap=ROBOFLOW_OVERLAP).json()
     except Exception as e:
-        logger.error(f"Błąd Roboflow: {e}", exc_info=True)
-        raise ValueError(f"Nie udało się połączyć z Roboflow lub przetworzyć obrazu: {e}")
+        logger.error(f"Błąd Roboflow: {e}")
+        raise ValueError(f"Błąd Roboflow: {e}")
+
+    predictions = prediction.get('predictions', [])
+    logger.info(f"Wykryto {len(predictions)} obiektów (przed filtracją)")
+    
+    # Logowanie wymiarów obrazu dla debugowania
+    import cv2
+    img_debug = cv2.imread(image_path)
+    if img_debug is not None:
+        h, w = img_debug.shape[:2]
+        logger.info(f"Rozmiar obrazu na serwerze: {w}x{h} pikseli")
 
     cue_ball = None
     other_balls = []
-    total_detections = len(prediction.get('predictions', []))
-    filtered_out = 0
-
-    for box in prediction.get('predictions', []):
+    all_detected_balls = []  # Wszystkie wykryte bile (przed filtracją obszarem)
+    
+    target_color_lower = cue_ball_color.lower()
+    # Pobierz listę klas (np. ["n3", "n11"] dla "red")
+    accepted_classes = COLOR_MAPPING.get(target_color_lower, [target_color_lower])
+    
+    for box in predictions:
+        cls_name = box['class'].lower() # np. "n1", "white"
+        
+        # Ignoruj klasę "Billiard"
+        if cls_name == "billiard":
+            continue
+            
         ball_data = {
             "x": int(box['x']),
             "y": int(box['y']),
-            "r": int((box['width'] + box['height']) / 4) 
+            "r": int((box['width'] + box['height']) / 4),
+            "class": cls_name,
+            "confidence": box['confidence']
         }
+        
+        # Zbierz wszystkie wykryte bile (przed filtracją obszarem) dla debugowania
+        all_detected_balls.append({
+            "x": ball_data["x"],
+            "y": ball_data["y"],
+            "r": ball_data["r"],
+            "class": ball_data["class"],
+            "confidence": ball_data["confidence"]
+        })
 
-        # Filtrowanie po obszarze stołu (jeśli podano)
-        if table_area and not is_point_inside_table_area(ball_data, table_area):
-            filtered_out += 1
-            continue
+        # KRYTYCZNY MOMENT: Filtracja obszarem
+        # Jeśli zdefiniowano table_area, wyrzucamy wszystko co nie jest w środku
+        if table_area:
+            is_inside = is_point_inside_table_area(ball_data, table_area)
+            if not is_inside:
+                logger.info(f"Odrzucono {cls_name} na poz ({ball_data['x']},{ball_data['y']}) - poza obszarem")
+                continue
+            else:
+                logger.debug(f"Zaakceptowano {cls_name} na poz ({ball_data['x']},{ball_data['y']}) - w obszarze")
 
-        # Sprawdzamy czy to bila cue (w wybranym kolorze)
-        if box['class'] == cue_ball_color:
-            if cue_ball is None or box['confidence'] > 0.5: 
+        # Czy to nasza bila rozgrywająca?
+        # Sprawdzamy czy wykryta klasa (np. "n3") jest na liście akceptowanych dla koloru "red")
+        if cls_name in accepted_classes:
+            if cue_ball is None or box['confidence'] > cue_ball.get('confidence', 0):
+                if cue_ball is not None:
+                    del cue_ball['confidence']
+                    other_balls.append(cue_ball)
                 cue_ball = ball_data
+            else:
+                other_balls.append(ball_data)
         else:
             other_balls.append(ball_data)
+            
+    if cue_ball and 'confidence' in cue_ball:
+        del cue_ball['confidence']
+        
+    logger.info(f"Po filtracji: Cue={cue_ball is not None}, Other={len(other_balls)}")
 
-    logger.info(f"Wykryto {total_detections} bil, odrzucono {filtered_out} spoza obszaru stołu")
-    logger.info(f"Wykryto bilę cue ({cue_ball_color}): {cue_ball is not None}, inne bile: {len(other_balls)}")
-    return cue_ball, other_balls
-
-def calculate_manual_shot_lines(white_ball_point, target_ball_point, pocket_point):
-    white_ball = {"x": white_ball_point['x'], "y": white_ball_point['y'], "r": DEFAULT_BALL_RADIUS}
-    target_ball = {"x": target_ball_point['x'], "y": target_ball_point['y'], "r": DEFAULT_BALL_RADIUS}
-    return calculate_shot_lines(white_ball, target_ball, pocket_point, DEFAULT_BALL_RADIUS)
+    return cue_ball, other_balls, all_detected_balls
