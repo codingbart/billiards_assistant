@@ -1,421 +1,333 @@
 import SwiftUI
+import PhotosUI
 
 struct CameraView: View {
-    
     @State private var capturedImage: UIImage?
     @StateObject private var cameraCoordinator = CameraViewController.Coordinator()
     
-    // Lista zaznaczonych łuz
     @State private var pockets: [CGPoint] = []
-    // Wynik z serwera
+    @State private var tableCorners: [CGPoint] = []
+    @State private var detectedBalls: [DetectedBall] = []
     @State private var bestShotResult: BestShotResult?
     
-    // Obszar stołu (narożniki przekątnej prostokąta)
-    @State private var tableAreaStart: CGPoint? = nil
-    @State private var tableAreaEnd: CGPoint? = nil
-    
-    // Tryby edycji
     @State private var isSelectingTableArea = false
-    @State private var showAllDetectedBalls = true  // Przełącznik wyświetlania wszystkich wykrytych bil
-    
-    // Domyślny kolor bili rozgrywającej
-    @State private var cueBallColor = "Red"
-    let availableColors = ["White", "Red", "Yellow", "Blue", "Green", "Orange", "Purple", "Black", "Brown"]
-    
-    @State private var networkManager = NetworkManager()
+    @State private var isShowingImagePicker = false
+    @State private var cueBallColor = "White"
+    @State private var currentStep: AppStep = .marking
     @State private var isLoading = false
     @State private var errorMessage: String?
+    
+    let networkManager = NetworkManager()
+    let availableColors = ["White", "Yellow", "Blue", "Red", "Purple", "Orange", "Green", "Brown", "Black", "Ignore"]
+    
+    enum AppStep {
+        case marking, verifying, result
+    }
     
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
             if capturedImage == nil {
-                // --- TRYB APARATU ---
-                CameraViewController(capturedImage: $capturedImage, coordinator: cameraCoordinator)
-                    .edgesIgnoringSafeArea(.all)
-                    .overlay(
-                        VStack {
-                            Spacer()
-                            Text("Ustaw kamerę prosto nad stołem")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(10)
-                                .padding(.bottom, 100)
-                        }
-                    )
-                
-                VStack {
+                cameraView
+            } else {
+                editorView
+            }
+        }
+    }
+    
+    var cameraView: some View {
+        ZStack {
+            CameraViewController(capturedImage: $capturedImage, coordinator: cameraCoordinator)
+                .edgesIgnoringSafeArea(.all)
+            VStack {
+                Spacer()
+                Text("Zrób zdjęcie lub wybierz z galerii").padding().background(Color.black.opacity(0.6)).cornerRadius(10).foregroundColor(.white).padding(.bottom, 100)
+                HStack {
+                    Button(action: { isShowingImagePicker = true }) {
+                        VStack { Image(systemName: "photo"); Text("Galeria").font(.caption) }.foregroundColor(.white).frame(width: 70)
+                    }
                     Spacer()
                     Button(action: { cameraCoordinator.capturePhoto() }) {
-                        ZStack {
-                            Circle().fill(Color.white).frame(width: 70, height: 70)
-                            Circle().stroke(Color.black, lineWidth: 2).frame(width: 60, height: 60)
-                        }
-                    }.padding(.bottom, 30)
-                }
-                
-            } else {
-                // --- TRYB EDYCJI / ANALIZY ---
-                GeometryReader { geometry in
-                    let (scale, offset) = calculateScaleAndOffset(imageSize: capturedImage?.size ?? .zero, viewSize: geometry.size)
-                    
-                    ZStack {
-                        if let image = capturedImage {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                                
-                                // GESTY
-                                .gesture(
-                                    // 1. Kliknięcie (Tap) do dodawania łuz
-                                    // Używamy DragGesture z minDistance 0, aby pobrać lokalizację.
-                                    // Poprawka: Dodano tolerancję ruchu < 10 punktów.
-                                    DragGesture(minimumDistance: 0)
-                                        .onEnded { value in
-                                            // Sprawdzamy, czy to było kliknięcie (małe przesunięcie)
-                                            if abs(value.translation.width) < 10 && abs(value.translation.height) < 10 {
-                                                // Dodajemy łuzę TYLKO gdy NIE zaznaczamy obszaru
-                                                if !isSelectingTableArea && bestShotResult == nil {
-                                                    if let imgPoint = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
-                                                        let p = CGPoint(x: imgPoint.x, y: imgPoint.y)
-                                                        pockets.append(p)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                )
-                                .simultaneousGesture(
-                                    // 2. Przeciąganie do zaznaczania obszaru stołu
-                                    DragGesture(minimumDistance: 5)
-                                        .onChanged { value in
-                                            if isSelectingTableArea && bestShotResult == nil {
-                                                if let imgPointStart = convertFromViewToImage(point: value.startLocation, imageSize: image.size, viewSize: geometry.size) {
-                                                    tableAreaStart = CGPoint(x: imgPointStart.x, y: imgPointStart.y)
-                                                }
-                                                if let imgPointEnd = convertFromViewToImage(point: value.location, imageSize: image.size, viewSize: geometry.size) {
-                                                    tableAreaEnd = CGPoint(x: imgPointEnd.x, y: imgPointEnd.y)
-                                                }
-                                            }
-                                        }
-                                )
-                            
-                            // WIZUALIZACJA ŁUZ
-                            ForEach(0..<pockets.count, id: \.self) { i in
-                                let p = pockets[i]
-                                let viewP = convertFromImageToView(point: Point(x: Int(p.x), y: Int(p.y)), scale: scale, offset: offset)
-                                ZStack {
-                                    Circle().fill(Color.black).frame(width: 24, height: 24)
-                                    Circle().stroke(Color.green, lineWidth: 2).frame(width: 24, height: 24)
-                                    Text("\(i+1)").font(.caption2).foregroundColor(.white)
-                                }
-                                .position(viewP)
-                            }
-                            
-                            // WIZUALIZACJA OBSZARU STOŁU
-                            if let start = tableAreaStart, let end = tableAreaEnd {
-                                let viewStart = convertFromImageToView(point: Point(x: Int(start.x), y: Int(start.y)), scale: scale, offset: offset)
-                                let viewEnd = convertFromImageToView(point: Point(x: Int(end.x), y: Int(end.y)), scale: scale, offset: offset)
-                                
-                                let rect = CGRect(
-                                    x: min(viewStart.x, viewEnd.x),
-                                    y: min(viewStart.y, viewEnd.y),
-                                    width: abs(viewEnd.x - viewStart.x),
-                                    height: abs(viewEnd.y - viewStart.y)
-                                )
-                                
-                                Rectangle()
-                                    .stroke(Color.yellow, style: StrokeStyle(lineWidth: 3, dash: [10]))
-                                    .frame(width: rect.width, height: rect.height)
-                                    .position(x: rect.midX, y: rect.midY)
-                            }
-                            
-                            // WIZUALIZACJA WSZYSTKICH WYKRYTYCH BIL (dla debugowania)
-                            if showAllDetectedBalls, let result = bestShotResult, let allDetected = result.all_detected_balls {
-                                ForEach(0..<allDetected.count, id: \.self) { i in
-                                    let ball = allDetected[i]
-                                    let center = convertFromImageToView(
-                                        point: Point(x: ball.x, y: ball.y),
-                                        scale: scale,
-                                        offset: offset
-                                    )
-                                    let radius = CGFloat(ball.r) * scale
-                                    
-                                    ZStack {
-                                        Circle()
-                                            .stroke(Color.orange.opacity(0.7), lineWidth: 2)
-                                            .frame(width: radius * 2, height: radius * 2)
-                                        VStack(spacing: 0) {
-                                            Text(ball.ballClass)
-                                                .font(.system(size: 7, weight: .bold))
-                                                .foregroundColor(.white)
-                                            Text(String(format: "%.0f%%", ball.confidence * 100))
-                                                .font(.system(size: 6))
-                                                .foregroundColor(.white.opacity(0.8))
-                                        }
-                                        .padding(2)
-                                        .background(Color.orange.opacity(0.8))
-                                        .cornerRadius(3)
-                                    }
-                                    .position(center)
-                                }
-                            }
-                            
-                            // WIZUALIZACJA WYNIKU
-                            if let result = bestShotResult {
-                                drawBestShot(result: result, scale: scale, offset: offset)
-                            }
-                        }
+                        Circle().stroke(Color.white, lineWidth: 4).frame(width: 70, height: 70)
                     }
-                }
-                
-                // PANEL STEROWANIA
-                VStack {
-                    // Góra: Wybór bili i przełącznik trybu
-                    if bestShotResult == nil {
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text("Bila rozgrywająca").font(.caption).foregroundColor(.gray)
-                                Picker("Kolor", selection: $cueBallColor) {
-                                    ForEach(availableColors, id: \.self) { color in
-                                        Text(color).tag(color)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .accentColor(.white)
-                                .background(Color.gray.opacity(0.3))
-                                .cornerRadius(5)
-                            }
-                            
-                            Spacer()
-                            
-                            Button(action: {
-                                isSelectingTableArea.toggle()
-                                if isSelectingTableArea {
-                                    // Reset obszaru przy ponownym włączeniu, aby zacząć od nowa
-                                    tableAreaStart = nil
-                                    tableAreaEnd = nil
-                                }
-                            }) {
-                                HStack {
-                                    Image(systemName: isSelectingTableArea ? "checkmark.square.fill" : "rectangle.dashed")
-                                    Text(isSelectingTableArea ? "Zakończ zaznaczanie" : "Zaznacz obszar")
-                                }
-                                .font(.caption)
-                                .padding(8)
-                                .background(isSelectingTableArea ? Color.yellow : Color.gray.opacity(0.5))
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
-                            }
-                        }
-                        .padding()
-                        .background(Color.black.opacity(0.7))
-                    }
-                    
-                    // Komunikaty
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.red)
-                            .cornerRadius(8)
-                            .padding()
-                    }
-                    
-                    if bestShotResult == nil {
-                        Text(isSelectingTableArea ? "Przeciągnij palcem, aby otoczyć stół (tylko sukno)." : "Dotknij wszystkich łuz na zdjęciu.")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.8))
-                            .padding(.top, 5)
-                    } else {
-                        HStack {
-                            if let angle = bestShotResult?.best_shot.angle {
-                                Text("Najlepszy strzał: kąt \(String(format: "%.1f", angle))°")
-                                    .font(.headline)
-                                    .padding()
-                                    .background(Color.green)
-                                    .foregroundColor(.white)
-                                    .cornerRadius(10)
-                            }
-                            
-                            // Przycisk przełączania wyświetlania wszystkich wykrytych bil
-                            if bestShotResult?.all_detected_balls != nil {
-                                Button(action: { showAllDetectedBalls.toggle() }) {
-                                    Image(systemName: showAllDetectedBalls ? "eye.fill" : "eye.slash.fill")
-                                        .foregroundColor(.white)
-                                        .padding(8)
-                                        .background(showAllDetectedBalls ? Color.orange : Color.gray.opacity(0.5))
-                                        .cornerRadius(8)
-                                }
-                            }
-                        }
-                    }
-                    
                     Spacer()
+                    Color.clear.frame(width: 70)
+                }.padding(.bottom, 40).padding(.horizontal)
+            }
+        }
+        .sheet(isPresented: $isShowingImagePicker) { ImagePicker(image: $capturedImage) }
+    }
+    
+    var editorView: some View {
+        GeometryReader { geometry in
+            let (scale, offset) = calculateScaleAndOffset(imageSize: capturedImage?.size ?? .zero, viewSize: geometry.size)
+            
+            ZStack {
+                if let image = capturedImage {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .position(x: geometry.size.width/2, y: geometry.size.height/2)
+                        .gesture(DragGesture(minimumDistance: 0).onEnded { val in
+                            if currentStep == .marking && abs(val.translation.width) < 5 {
+                                handleTap(at: val.startLocation, imageSize: image.size, viewSize: geometry.size)
+                            }
+                        })
                     
-                    // Dół: Przyciski akcji
-                    HStack {
-                        Button(action: resetAll) {
-                            VStack {
-                                Image(systemName: "trash")
-                                Text("Od nowa").font(.caption)
-                            }
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.red.opacity(0.8))
-                            .clipShape(Circle())
-                        }
-                        
-                        Spacer()
-                        
-                        if bestShotResult == nil {
-                            Button(action: scanTable) {
-                                HStack {
-                                    if isLoading {
-                                        ProgressView().tint(.white)
-                                    } else {
-                                        Image(systemName: "scope")
-                                        Text("ANALIZUJ")
-                                    }
-                                }
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 30)
-                                .padding(.vertical, 15)
-                                .background(pockets.count < 1 ? Color.gray : Color.blue)
-                                .cornerRadius(25)
-                            }
-                            .disabled(pockets.isEmpty || isLoading)
-                        }
+                    // RYSOWANIE
+                    drawTableAndPockets(scale: scale, offset: offset)
+                    
+                    if currentStep == .verifying {
+                        drawBallsForVerification(scale: scale, offset: offset)
                     }
-                    .padding(30)
+                    
+                    if currentStep == .result, let res = bestShotResult {
+                        drawBestShot(result: res, scale: scale, offset: offset)
+                    }
+                }
+                
+                // PANEL DOLNY
+                VStack {
+                    if let err = errorMessage {
+                        Text(err).foregroundColor(.white).padding().background(Color.red).cornerRadius(8).padding()
+                    }
+                    Spacer()
+                    bottomControlPanel
                 }
             }
         }
     }
     
-    // --- LOGIKA ---
+    // --- KOMPONENTY UI ---
     
-    func scanTable() {
-        guard let image = capturedImage else { return }
-        
-        var tableArea: [CGPoint]? = nil
-        if let start = tableAreaStart, let end = tableAreaEnd {
-            let xMin = min(start.x, end.x)
-            let xMax = max(start.x, end.x)
-            let yMin = min(start.y, end.y)
-            let yMax = max(start.y, end.y)
-            
-            tableArea = [
-                CGPoint(x: xMin, y: yMin), // Lewy-Góra
-                CGPoint(x: xMax, y: yMin), // Prawy-Góra
-                CGPoint(x: xMax, y: yMax), // Prawy-Dół
-                CGPoint(x: xMin, y: yMax)  // Lewy-Dół
-            ]
-        }
-        
-        isLoading = true
-        errorMessage = nil
-        
-        networkManager.analyzeBestShot(
-            image: image,
-            pockets: pockets,
-            imageSize: image.size,
-            tableArea: tableArea,
-            cueBallColor: cueBallColor
-        ) { result in
-            isLoading = false
-            switch result {
-            case .success(let data):
-                self.bestShotResult = data
-            case .failure(let error):
-                self.errorMessage = error.localizedDescription
+    var bottomControlPanel: some View {
+        Group {
+            switch currentStep {
+            case .marking:
+                VStack(spacing: 15) {
+                    Text("1. Zaznacz 4 rogi stołu i 6 łuz").font(.headline).foregroundColor(.white)
+                    HStack {
+                        Button("Rogi (\(tableCorners.count))") { isSelectingTableArea = true }
+                            .buttonStyle(ModeBtn(active: isSelectingTableArea))
+                        Button("Łuzy (\(pockets.count))") { isSelectingTableArea = false }
+                            .buttonStyle(ModeBtn(active: !isSelectingTableArea))
+                    }
+                    HStack {
+                        Button("Reset") { resetAll() }.foregroundColor(.red)
+                        Spacer()
+                        Button("DALEJ >") { runDetection() }
+                            .buttonStyle(ActionBtn(enabled: tableCorners.count == 4))
+                            .disabled(tableCorners.count != 4 || isLoading)
+                    }
+                }.padding().background(Color.black.opacity(0.8))
+                
+            case .verifying:
+                VStack(spacing: 15) {
+                    Text("2. Kliknij w bilę, by zmienić kolor").font(.headline).foregroundColor(.white)
+                    HStack {
+                        Text("Twoja bila:")
+                        Picker("", selection: $cueBallColor) {
+                            ForEach(availableColors.filter{$0 != "Ignore"}, id: \.self) { c in Text(c).tag(c) }
+                        }.pickerStyle(.menu)
+                    }.foregroundColor(.white)
+                    HStack {
+                        Button("Wstecz") { currentStep = .marking }.foregroundColor(.white)
+                        Spacer()
+                        if isLoading { ProgressView().tint(.white) }
+                        else {
+                            Button("OBLICZ STRZAŁ") { runCalculation() }
+                                .buttonStyle(ActionBtn(enabled: true))
+                        }
+                    }
+                }.padding().background(Color.black.opacity(0.8))
+                
+            case .result:
+                VStack {
+                    if let angle = bestShotResult?.best_shot.angle {
+                        Text("Kąt: \(String(format: "%.1f", angle))°")
+                            .font(.title).bold().foregroundColor(.green)
+                            .padding().background(Color.black.opacity(0.8)).cornerRadius(10)
+                    }
+                    Spacer()
+                    Button("Od nowa") { resetAll() }
+                        .padding().background(Color.blue).foregroundColor(.white).cornerRadius(10).padding(.bottom)
+                }
             }
         }
     }
     
-    func resetAll() {
-        capturedImage = nil
-        pockets.removeAll()
-        bestShotResult = nil
-        errorMessage = nil
-        isLoading = false
-        tableAreaStart = nil
-        tableAreaEnd = nil
-        isSelectingTableArea = false
-        cueBallColor = "Red" 
+    func drawTableAndPockets(scale: CGFloat, offset: CGPoint) -> some View {
+        Group {
+            if !tableCorners.isEmpty {
+                Path { path in
+                    for (i, p) in tableCorners.enumerated() {
+                        let vp = convert(p, scale, offset)
+                        i == 0 ? path.move(to: vp) : path.addLine(to: vp)
+                    }
+                    if tableCorners.count == 4 { path.closeSubpath() }
+                }.stroke(Color.yellow, lineWidth: 2)
+            }
+            ForEach(pockets.indices, id: \.self) { i in
+                Circle().fill(Color.green).frame(width: 20, height: 20).position(convert(pockets[i], scale, offset))
+            }
+        }
+    }
+    
+    func drawBallsForVerification(scale: CGFloat, offset: CGPoint) -> some View {
+        ForEach($detectedBalls) { $ball in
+            let center = convert(CGPoint(x: ball.x, y: ball.y), scale, offset)
+            let r = CGFloat(ball.r) * scale
+            Button(action: { cycleColor(for: &ball) }) {
+                ZStack {
+                    if ball.ballClass == "ignore" {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.red)
+                    } else {
+                        Circle().stroke(colorForClass(ball.ballClass), lineWidth: 3)
+                            .background(Circle().fill(colorForClass(ball.ballClass).opacity(0.3)))
+                            .frame(width: max(20, r*2), height: max(20, r*2))
+                        Text(ball.ballClass.prefix(1).uppercased())
+                            .font(.system(size: 10, weight: .bold)).foregroundColor(.white).shadow(radius: 1)
+                    }
+                }
+            }.position(center)
+        }
     }
     
     @ViewBuilder
     func drawBestShot(result: BestShotResult, scale: CGFloat, offset: CGPoint) -> some View {
         let shot = result.best_shot
-        
-        // 1. Linia: Bila Cel -> Łuza (Ciągła Zielona)
-        if let lineToPocket = shot.shot_lines.first {
-            let start = convertFromImageToView(point: lineToPocket.start, scale: scale, offset: offset)
-            let end = convertFromImageToView(point: lineToPocket.end, scale: scale, offset: offset)
-            Path { p in p.move(to: start); p.addLine(to: end) }
-                .stroke(Color.green, lineWidth: 4)
+        if let l1 = shot.shot_lines.first {
+            let s = convert(CGPoint(x: l1.start.x, y: l1.start.y), scale, offset)
+            let e = convert(CGPoint(x: l1.end.x, y: l1.end.y), scale, offset)
+            Path { p in p.move(to: s); p.addLine(to: e) }.stroke(Color.green, lineWidth: 4)
         }
-        
-        // 2. Linia: Bila Startowa -> Bila Duch (Przerywana Biała)
         if shot.shot_lines.count > 1 {
-            let lineFromCue = shot.shot_lines[1]
-            let start = convertFromImageToView(point: lineFromCue.start, scale: scale, offset: offset)
-            let end = convertFromImageToView(point: lineFromCue.end, scale: scale, offset: offset)
-            Path { p in p.move(to: start); p.addLine(to: end) }
-                .stroke(Color.white, style: StrokeStyle(lineWidth: 3, dash: [10]))
+            let l2 = shot.shot_lines[1]
+            let s = convert(CGPoint(x: l2.start.x, y: l2.start.y), scale, offset)
+            let e = convert(CGPoint(x: l2.end.x, y: l2.end.y), scale, offset)
+            Path { p in p.move(to: s); p.addLine(to: e) }.stroke(Color.white, style: StrokeStyle(lineWidth: 3, dash: [5]))
         }
-        
-        // 3. Bila Duch
-        let ghostCenter = convertFromImageToView(point: shot.ghost_ball.center, scale: scale, offset: offset)
+        let ghost = convert(CGPoint(x: shot.ghost_ball.center.x, y: shot.ghost_ball.center.y), scale, offset)
         let r = CGFloat(shot.ghost_ball.radius) * scale
-        Circle()
-            .stroke(Color.white, lineWidth: 2)
-            .frame(width: r*2, height: r*2)
-            .position(ghostCenter)
-            
-        // 4. Bila Startowa
-        let cueCenter = convertFromImageToView(point: result.white_ball, scale: scale, offset: offset)
-        Circle().fill(Color.blue).frame(width: 15, height: 15).position(cueCenter)
+        Circle().stroke(Color.white, lineWidth: 2).frame(width: r*2, height: r*2).position(ghost)
         
-        // 5. Bila Cel
-        let targetCenter = convertFromImageToView(point: shot.target_ball, scale: scale, offset: offset)
-        Circle().fill(Color.red).frame(width: 15, height: 15).position(targetCenter)
+        let target = convert(CGPoint(x: shot.target_ball.x, y: shot.target_ball.y), scale, offset)
+        Circle().fill(Color.red).frame(width: 10, height: 10).position(target)
     }
     
-    // --- POMOCNICZE ---
+    // --- LOGIKA ---
+    
+    func runDetection() {
+        guard let img = capturedImage else { return }
+        isLoading = true; errorMessage = nil
+        networkManager.detectBalls(image: img, tableArea: tableCorners) { res in
+            isLoading = false
+            switch res {
+            case .success(let balls):
+                self.detectedBalls = balls
+                if balls.isEmpty { self.errorMessage = "Nie wykryto żadnych bil." }
+                else { self.currentStep = .verifying }
+            case .failure(let err): self.errorMessage = "Błąd: \(err.localizedDescription)"
+            }
+        }
+    }
+    
+    func runCalculation() {
+        guard let img = capturedImage else { return }
+        isLoading = true; errorMessage = nil
+        networkManager.calculateShot(balls: detectedBalls, pockets: pockets, tableArea: tableCorners, cueBallColor: cueBallColor) { res in
+            isLoading = false
+            switch res {
+            case .success(let result):
+                self.bestShotResult = result
+                self.currentStep = .result
+            case .failure(let err): self.errorMessage = "Błąd: \(err.localizedDescription)"
+            }
+        }
+    }
+    
+    func handleTap(at location: CGPoint, imageSize: CGSize, viewSize: CGSize) {
+        guard let p = convertFromViewToImage(point: location, imageSize: imageSize, viewSize: viewSize) else { return }
+        let point = CGPoint(x: p.x, y: p.y)
+        if isSelectingTableArea {
+            if tableCorners.count < 4 { tableCorners.append(point) }
+            else { tableCorners = [point] }
+        } else { pockets.append(point) }
+    }
+    
+    func cycleColor(for ball: inout DetectedBall) {
+        let colors = ["white", "yellow", "blue", "red", "purple", "orange", "green", "brown", "black", "ignore"]
+        if let idx = colors.firstIndex(of: ball.ballClass.lowercased()) {
+            ball.ballClass = colors[(idx + 1) % colors.count]
+        } else { ball.ballClass = "white" }
+    }
+    
+    func colorForClass(_ cls: String) -> Color {
+        switch cls.lowercased() {
+        case "white": return .white; case "yellow": return .yellow; case "blue": return .blue
+        case "red": return .red; case "purple": return .purple; case "orange": return .orange
+        case "green": return .green; case "brown": return .brown; case "black": return .gray
+        default: return .white
+        }
+    }
+    
+    func resetAll() {
+        capturedImage = nil; pockets = []; tableCorners = []; detectedBalls = []; bestShotResult = nil
+        currentStep = .marking; errorMessage = nil
+    }
+    
+    // --- SKALOWANIE ---
+    
     func calculateScaleAndOffset(imageSize: CGSize, viewSize: CGSize) -> (scale: CGFloat, offset: CGPoint) {
-        guard imageSize.width > 0, imageSize.height > 0 else { return (0, .zero) }
         let widthScale = viewSize.width / imageSize.width
         let heightScale = viewSize.height / imageSize.height
         let scale = min(widthScale, heightScale)
-        let scaledImageSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
-        let offsetX = (viewSize.width - scaledImageSize.width) / 2
-        let offsetY = (viewSize.height - scaledImageSize.height) / 2
-        return (scale, CGPoint(x: offsetX, y: offsetY))
+        let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return (scale, CGPoint(x: (viewSize.width - scaledSize.width)/2, y: (viewSize.height - scaledSize.height)/2))
     }
-    
     func convertFromViewToImage(point: CGPoint, imageSize: CGSize, viewSize: CGSize) -> Point? {
-        guard imageSize.width > 0, imageSize.height > 0 else { return nil }
         let (scale, offset) = calculateScaleAndOffset(imageSize: imageSize, viewSize: viewSize)
-        let imageX = (point.x - offset.x) / scale
-        let imageY = (point.y - offset.y) / scale
-        let clampedX = min(max(imageX, 0), imageSize.width)
-        let clampedY = min(max(imageY, 0), imageSize.height)
-        return Point(x: Int(clampedX), y: Int(clampedY))
+        return Point(x: Int((point.x - offset.x) / scale), y: Int((point.y - offset.y) / scale))
     }
-    
-    func convertFromImageToView(point: Point, scale: CGFloat, offset: CGPoint) -> CGPoint {
-        let viewX = (CGFloat(point.x) * scale) + offset.x
-        let viewY = (CGFloat(point.y) * scale) + offset.y
-        return CGPoint(x: viewX, y: viewY)
+    func convert(_ p: CGPoint, _ scale: CGFloat, _ offset: CGPoint) -> CGPoint {
+        return CGPoint(x: p.x * scale + offset.x, y: p.y * scale + offset.y)
     }
-    
-    func convertFromImageToView(point: Ball, scale: CGFloat, offset: CGPoint) -> CGPoint {
-        return convertFromImageToView(point: Point(x: point.x, y: point.y), scale: scale, offset: offset)
+}
+
+// Komponent ImagePicker
+struct ImagePicker: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
+    @Environment(\.presentationMode) var presentationMode
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration(); config.filter = .images
+        let picker = PHPickerViewController(configuration: config); picker.delegate = context.coordinator; return picker
+    }
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: ImagePicker
+        init(_ parent: ImagePicker) { self.parent = parent }
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            parent.presentationMode.wrappedValue.dismiss()
+            guard let provider = results.first?.itemProvider else { return }
+            if provider.canLoadObject(ofClass: UIImage.self) {
+                provider.loadObject(ofClass: UIImage.self) { img, _ in DispatchQueue.main.async { self.parent.image = img as? UIImage } }
+            }
+        }
+    }
+}
+
+// Style
+struct ModeBtn: ButtonStyle {
+    var active: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.padding(8).background(active ? Color.yellow : Color.gray.opacity(0.3))
+            .foregroundColor(active ? .black : .white).cornerRadius(8)
+    }
+}
+struct ActionBtn: ButtonStyle {
+    var enabled: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.padding().background(enabled ? Color.blue : Color.gray)
+            .foregroundColor(.white).cornerRadius(10)
     }
 }
