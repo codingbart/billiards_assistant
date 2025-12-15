@@ -3,8 +3,8 @@ import UIKit
 
 class NetworkManager {
     
-    // TWOJE IP (Upewnij się, że jest poprawne)
-    let baseURL = "http://192.168.30.112:5001"
+    // TWOJE IP - upewnij się, że jest aktualne!
+    let baseURL = "http://192.168.30.105:5001"
     
     private let urlSession: URLSession
     
@@ -14,10 +14,16 @@ class NetworkManager {
         self.urlSession = URLSession(configuration: config)
     }
     
-    // KROK 1: Detekcja (Zwraca listę bil)
-    func detectBalls(image: UIImage, tableArea: [CGPoint]?, completion: @escaping (Result<[DetectedBall], Error>) -> Void) {
+    // KROK 1: Detekcja (Zwraca listę bil do edycji)
+    func detectBalls(
+        image: UIImage,
+        tableArea: [CGPoint]?,
+        calibrationPoint: CGPoint?,
+        completion: @escaping (Result<[DetectedBall], Error>) -> Void
+    ) {
         guard let url = URL(string: "\(baseURL)/detect") else { return }
         
+        // Skalowanie do 640px dla szybkości (scale=1.0 naprawia Retinę)
         let targetWidth: CGFloat = 640.0
         guard let (resizedImage, scaleFactor) = getNormalizedImage(image: image, targetWidth: targetWidth) else {
             completion(.failure(NSError(domain: "App", code: -1, userInfo: [NSLocalizedDescriptionKey: "Błąd obrazu"])))
@@ -31,7 +37,7 @@ class NetworkManager {
         
         var body = Data()
         
-        // Obszar stołu
+        // Wysyłamy obszar stołu (przeskalowany)
         if let area = tableArea {
             let scaledArea = area.map { Point(x: Int($0.x * scaleFactor), y: Int($0.y * scaleFactor)) }
             if let areaData = try? JSONEncoder().encode(scaledArea), let areaStr = String(data: areaData, encoding: .utf8) {
@@ -41,7 +47,17 @@ class NetworkManager {
             }
         }
         
-        // Plik
+        // Wysyłamy punkt kalibracji (przeskalowany)
+        if let cp = calibrationPoint {
+            let scaledCP = Point(x: Int(cp.x * scaleFactor), y: Int(cp.y * scaleFactor))
+            if let cpData = try? JSONEncoder().encode(scaledCP), let cpStr = String(data: cpData, encoding: .utf8) {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"calibration_point\"\r\n\r\n".data(using: .utf8)!)
+                body.append("\(cpStr)\r\n".data(using: .utf8)!)
+            }
+        }
+        
+        // Wysyłamy plik
         if let jpeg = resizedImage.jpegData(compressionQuality: 0.8) {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"file\"; filename=\"img.jpg\"\r\n".data(using: .utf8)!)
@@ -61,7 +77,8 @@ class NetworkManager {
                 
                 do {
                     let res = try JSONDecoder().decode(DetectionResponse.self, from: data)
-                    // Skalowanie w górę (powrót do oryginału)
+                    
+                    // Skalujemy wyniki z powrotem W GÓRĘ (do oryginału)
                     let upScale = 1.0 / scaleFactor
                     let finalBalls = res.balls.map { b in
                         var newB = b
@@ -80,10 +97,17 @@ class NetworkManager {
         }.resume()
     }
     
-    // KROK 2: Obliczenia (Wysyła poprawione bile)
-    func calculateShot(balls: [DetectedBall], pockets: [CGPoint], tableArea: [CGPoint]?, cueBallColor: String, completion: @escaping (Result<BestShotResult, Error>) -> Void) {
+    // KROK 2: Obliczenia (Wysyła zweryfikowane bile, zwraca linie)
+    func calculateShot(
+        balls: [DetectedBall],
+        pockets: [CGPoint],
+        tableArea: [CGPoint]?,
+        cueBallColor: String,
+        completion: @escaping (Result<BestShotResult, Error>) -> Void
+    ) {
         guard let url = URL(string: "\(baseURL)/calculate") else { return }
         
+        // Konwersja na proste słowniki JSON
         let ballsDicts = balls.map { ["x": $0.x, "y": $0.y, "r": $0.r, "class": $0.ballClass] }
         let pocketsDicts = pockets.map { ["x": Int($0.x), "y": Int($0.y)] }
         let areaDicts = tableArea?.map { ["x": Int($0.x), "y": Int($0.y)] } ?? []
@@ -125,6 +149,7 @@ class NetworkManager {
         }.resume()
     }
     
+    // Helper naprawiający błąd Retina (scale 1.0)
     private func getNormalizedImage(image: UIImage, targetWidth: CGFloat) -> (UIImage, CGFloat)? {
         let scaleFactor = targetWidth / image.size.width
         let targetHeight = image.size.height * scaleFactor
