@@ -1,32 +1,14 @@
 from flask import Flask, request, jsonify
 import os
 import json
-import logging
 from werkzeug.utils import secure_filename
-from dotenv import load_dotenv
-from processing import detect_all_balls, find_best_shot
-
-load_dotenv()
-
-# Logging - plikowy + stdout
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-file_handler = logging.FileHandler("server.log")
-file_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
+from config import logger, UPLOAD_FOLDER, allowed_file
+from image_processing import detect_all_balls
+from shot_calculation import find_best_shot
 
 app = Flask(__name__)
-UPLOAD_FOLDER = 'static/uploads/'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # 2 MB max
-ALLOWED_EXT = {'.jpg', '.jpeg', '.png'}
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-def allowed_file(filename):
-    fn = filename.lower()
-    return any(fn.endswith(ext) for ext in ALLOWED_EXT)
 
 # 1. DETEKCJA (Zwraca listę bil)
 @app.route('/detect', methods=['POST'])

@@ -13,6 +13,11 @@
 		1A06AB172EB6A91000D6787C /* MagnifyingLoupeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A06AB162EB6A91000D6787C /* MagnifyingLoupeView.swift */; };
 		1A80F55A2EC14E46008D670F /* SplashScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A80F5592EC14E46008D670F /* SplashScreen.swift */; };
 		1A82DEBC2EE8BD9D00377FC7 /* DataModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A82DEBB2EE8BD9D00377FC7 /* DataModels.swift */; };
+		1A83DEBC2EE8BD9D00377FC8 /* CameraViewComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A83DEBB2EE8BD9D00377FC8 /* CameraViewComponents.swift */; };
+		1A84DEBC2EE8BD9D00377FC9 /* CameraViewLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A84DEBB2EE8BD9D00377FC9 /* CameraViewLogic.swift */; };
+		1A85DEBC2EE8BD9D00377FCA /* CoordinateHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A85DEBB2EE8BD9D00377FCA /* CoordinateHelpers.swift */; };
+		1A86DEBC2EE8BD9D00377FCB /* DrawingHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A86DEBB2EE8BD9D00377FCB /* DrawingHelpers.swift */; };
+		1A87DEBC2EE8BD9D00377FCC /* UIComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A87DEBB2EE8BD9D00377FCC /* UIComponents.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -39,6 +44,11 @@
 		1A06AB162EB6A91000D6787C /* MagnifyingLoupeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagnifyingLoupeView.swift; sourceTree = "<group>"; };
 		1A80F5592EC14E46008D670F /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
 		1A82DEBB2EE8BD9D00377FC7 /* DataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataModels.swift; sourceTree = "<group>"; };
+		1A83DEBB2EE8BD9D00377FC8 /* CameraViewComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraViewComponents.swift; sourceTree = "<group>"; };
+		1A84DEBB2EE8BD9D00377FC9 /* CameraViewLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraViewLogic.swift; sourceTree = "<group>"; };
+		1A85DEBB2EE8BD9D00377FCA /* CoordinateHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateHelpers.swift; sourceTree = "<group>"; };
+		1A86DEBB2EE8BD9D00377FCB /* DrawingHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingHelpers.swift; sourceTree = "<group>"; };
+		1A87DEBB2EE8BD9D00377FCC /* UIComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIComponents.swift; sourceTree = "<group>"; };
 		1ABF1B712EB17ADA009C717D /* BilliardAssistant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BilliardAssistant.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1ABF1B7E2EB17ADD009C717D /* BilliardAssistantTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BilliardAssistantTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1ABF1B882EB17ADD009C717D /* BilliardAssistantUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BilliardAssistantUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -107,6 +117,11 @@
 				1A80F5592EC14E46008D670F /* SplashScreen.swift */,
 				1A06AB062EB699A500D6787C /* CameraViewController.swift */,
 				1A06AB042EB697BD00D6787C /* CameraView.swift */,
+				1A83DEBB2EE8BD9D00377FC8 /* CameraViewComponents.swift */,
+				1A84DEBB2EE8BD9D00377FC9 /* CameraViewLogic.swift */,
+				1A85DEBB2EE8BD9D00377FCA /* CoordinateHelpers.swift */,
+				1A86DEBB2EE8BD9D00377FCB /* DrawingHelpers.swift */,
+				1A87DEBB2EE8BD9D00377FCC /* UIComponents.swift */,
 				1A06AB162EB6A91000D6787C /* MagnifyingLoupeView.swift */,
 				1A06AAF42EB6968500D6787C /* NetworkManager.swift */,
 				1ABF1B732EB17ADA009C717D /* BilliardAssistant */,
@@ -276,6 +291,11 @@
 				1A80F55A2EC14E46008D670F /* SplashScreen.swift in Sources */,
 				1A06AB072EB699A600D6787C /* CameraViewController.swift in Sources */,
 				1A06AB052EB697BD00D6787C /* CameraView.swift in Sources */,
+				1A83DEBC2EE8BD9D00377FC8 /* CameraViewComponents.swift in Sources */,
+				1A84DEBC2EE8BD9D00377FC9 /* CameraViewLogic.swift in Sources */,
+				1A85DEBC2EE8BD9D00377FCA /* CoordinateHelpers.swift in Sources */,
+				1A86DEBC2EE8BD9D00377FCB /* DrawingHelpers.swift in Sources */,
+				1A87DEBC2EE8BD9D00377FCC /* UIComponents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
